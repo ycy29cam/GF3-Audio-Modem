@@ -21,7 +21,7 @@ def chirp(fstart,fend, duration, fs,):
     t = np.linspace(0, duration, int(fs * duration), endpoint=False)
     return scipy.signal.chirp(t, f0=fstart, f1=fend, t1=duration, method='linear') * 0.8
 
-def OFDM_pilot(length):
+def OFDM_pilot(length = None):
     """
     Generates a random array of constellation symbols
     Uses a fixed seed for random generation
@@ -30,6 +30,8 @@ def OFDM_pilot(length):
     :return: outputs array dimension (2*length - 2 bits) for even block lengths, of QPSK symbols mapped to time domain
     :QUESTION: how best should the 2 bit discrepancy be handled (note 2*length - 1 = odd o/p length)
     """
+    if length is None:
+        length = int((BLOCK_LENGTH + 2) / 2)
     np.random.seed(seed=42)
     B_matrix = np.random.randint(2, size=(length,2))
     symbol_map = {
@@ -42,7 +44,7 @@ def OFDM_pilot(length):
     x[[0,-1]] = [0,0] # ensures 0 mean conjugate symmetric signal
     x = np.asarray(x, dtype=np.complex128) # ensures the generated data is an array
     y = np.concatenate([x, np.conj(x[-2:0:-1])]) # y is useful data with conjugate symmetry in freq domain
-    return np.real(scipy.fft.ifft(y)) #computes IFFT of the data
+    return np.real(scipy.fft.ifft(y)), symbol_map, length , #computes IFFT of the data
 
 
 def noise(length):
@@ -52,20 +54,127 @@ def noise(length):
 
 "-------------------------------Sequence Code-----------------------------------"
 
-def sequence_generator(length = None):
-    if length is None:#length formula used to ensure time domain output - BLOCK_LENGTH - check carefully when
-    #changing block_length that variable "length" is still even - if not then length calculation is wrong
-        length = int((BLOCK_LENGTH + 2) / 2)
+# def sequence_generator(length = None):
+#     if length is None:#length formula used to ensure time domain output - BLOCK_LENGTH - check carefully when
+#     #changing block_length that variable "length" is still even - if not then length calculation is wrong
+#         length = int((BLOCK_LENGTH + 2) / 2)
 
+#     silence = np.zeros(int(1 * SAMPLE_RATE))
+#     symbol = OFDM_pilot(length)*15 
+#     prefixed_symbol = np.concatenate((symbol[-CP:],symbol ))
+#     chirp_start = chirp(20,15000, 2, fs = SAMPLE_RATE)
+#     chirp_end = chirp(15000,20, 2, fs = SAMPLE_RATE)
+#     blocks = [] # list of data blocks, will need to make this a for loop at some point for real data
+#     blocks.append(silence)
+#     blocks.append(chirp_start)
+#     blocks.append(prefixed_symbol)
+#     blocks.append(np.tile(symbol, 3))
+#     blocks.append(chirp_end)
+#     block_lengths = [len(block) for block in blocks]
+#     signal = np.concatenate(blocks, axis=0) # may need a prefix for chirp_end at some point
+#     return signal, chirp_start, chirp_end, block_lengths, length
+
+
+# def sequence_generator(length = None):
+#     """
+#     Generates a predetermined sequence of bits & metadata in order to produce an audio signal
+#     :param length: length of useful information in a single OFDM symbol block
+#     if length = None function maps to make OFDM block = BLOCK_LENGTH ; ensure length = even otherwise
+#     None formula breaks down and is no longer accurate
+#     :return signal: output binary bits - to be played
+#     :return chirp_start: output array for start_chirp for synchronisation 
+#     :return chirp_end: output array for end_chirp for synchronisation
+#     :return block_lengths: array of block lengths, used in decoder
+#     :return length: length of useful data, used in decoder
+#     :return block_types: array of block types, used in decoder
+#     """
+#     if length is None:  # length formula used to ensure time domain output - BLOCK_LENGTH
+#         length = int((BLOCK_LENGTH + 2) / 2)
+
+#     silence = np.zeros(int(1 * SAMPLE_RATE))
+#     symbol = OFDM_pilot(length) * 15
+#     prefixed_symbol = np.concatenate((symbol[-CP:], symbol))
+#     chirp_start = chirp(20, 15000, 2, fs=SAMPLE_RATE)
+#     chirp_end = chirp(15000, 20, 2, fs=SAMPLE_RATE)
+
+#     blocks = []  # list of data blocks
+#     block_types = []  # list of block labels
+
+#     blocks.append(silence)
+#     block_types.append("silence")
+
+#     blocks.append(chirp_start)
+#     block_types.append("chirp_start")
+
+#     blocks.append(prefixed_symbol)
+#     block_types.append("prefixed_symbol")
+
+#     blocks.append(np.tile(symbol, 3))
+#     block_types.append("symbol_repeated")
+
+#     blocks.append(chirp_end)
+#     block_types.append("chirp_end")
+
+#     block_lengths = [len(block) for block in blocks]
+#     signal = np.concatenate(blocks, axis=0)
+
+#     return signal, chirp_start, chirp_end, block_lengths, length, block_types
+
+def sequence_generator(pattern=None):
+    """
+    Generates a predetermined sequence of bits & metadata in order to produce an audio signal
+    :param length: length of useful information in a single OFDM symbol block
+    if length = None function maps to make OFDM block = BLOCK_LENGTH ; ensure length = even otherwise
+    None formula breaks down and is no longer accurate
+    :return signal: output binary bits - to be played
+    :return chirp_start: output array for start_chirp for synchronisation 
+    :return chirp_end: output array for end_chirp for synchronisation
+    :return block_lengths: array of block lengths, used in decoder
+    :return length: length of useful data, used in decoder
+    :return block_types: array of block types, used in decoder
+    """
+
+    # Block type codes
+    BLOCK_TYPES = {
+        0: "silence",
+        1: "chirp_start",
+        2: "prefixed_symbol",
+        3: "symbol",
+        4: "chirp_end"
+    }
+
+    # Default pattern
+    if pattern is None:
+        pattern = [2, 3, 3, 3] * 1  # You can change this pattern easily
+
+    # Generate building blocks
     silence = np.zeros(int(1 * SAMPLE_RATE))
-    symbol = OFDM_pilot(length)*15 # used arbitrary factor of 50 to amplify the OFDM generated noise
-    prefixed_symbol = np.concatenate((symbol[-CP:],symbol ))
-    chirp_start = chirp(20,15000, 2, fs = SAMPLE_RATE)
-    chirp_end = chirp(15000,20, 2, fs = SAMPLE_RATE)
-    
+    symbol = (OFDM_pilot()[0]) * 15
+    prefixed_symbol = np.concatenate((symbol[-CP:], symbol))
+    chirp_start = chirp(20, 15000, 2, fs=SAMPLE_RATE)
+    chirp_end = chirp(15000, 20, 2, fs=SAMPLE_RATE)
 
-    signal = np.concatenate((silence, chirp_start, prefixed_symbol, np.tile(symbol, 3), chirp_end), axis=0) # may need a prefix for chirp_end at some point
-    return signal, chirp_start, chirp_end
+    # Block type to actual signal
+    block_library = {
+        0: silence,
+        1: chirp_start,
+        2: prefixed_symbol,
+        3: symbol,
+        4: chirp_end
+    }
+
+    # Build final sequence
+    block_sequence = [0, 1] + pattern + [4]  # Start with silence, chirp_start; end with chirp_end
+
+    blocks = [block_library[t] for t in block_sequence] # creates a nested list of blocks
+    pattern_blocks = [block_library[t] for t in pattern] # creates a nested list of pattern blocks
+    signal = np.concatenate(blocks) # turns it into a 1D array including chirps + delay
+    block_lengths = [len(b) for b in pattern_blocks] # uses nested list to output block lengths ONLY of relevant signal blocks
+    block_type_ids = pattern  # list of integers that can be accessed using BLOCK TYPES
+    length = OFDM_pilot()[2]
+
+    return signal, chirp_start, chirp_end, block_lengths, length, block_type_ids, BLOCK_TYPES, pattern_blocks
+
 
 
 
@@ -85,7 +194,7 @@ if __name__ == "__main__":
     plt.show()
 
 #save to a .wav file, and play back using audacity, as this (supposedly) avoids noise cancelling behaviour
-write('signal.wav', SAMPLE_RATE, sequence_generator()[0])
+write('testsignal.wav', SAMPLE_RATE, sequence_generator()[0])
 
 
 #sd.play(sequence_generator()[0], samplerate=SAMPLE_RATE)

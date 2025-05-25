@@ -22,7 +22,7 @@ if __name__ == "__main__":
     recording = sd.rec(int(DURATION * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=2) # records audio from 2 channels, time = DURATION
     sd.wait()
     start_bin, end_bin, sync_start_data, sync_end_data = sync(recording)
-    write('signal_recorded.wav', SAMPLE_RATE, recording)
+    write('signal_recorded_2.wav', SAMPLE_RATE, recording)
 
 
 # synchronisation plot -  use HiBy music to play sound from phone
