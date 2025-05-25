@@ -1,10 +1,12 @@
 import scipy.fft
+from scipy.io.wavfile import write
 import Constants
 import numpy as np
 import scipy
 import sounddevice as sd
 import time
 import matplotlib.pyplot as plt
+
 from Constants import *
 
 def chirp(fstart,fend, duration, fs,):
@@ -17,7 +19,7 @@ def chirp(fstart,fend, duration, fs,):
     :return: Chirp signal
     """
     t = np.linspace(0, duration, int(fs * duration), endpoint=False)
-    return scipy.signal.chirp(t, f0=fstart, f1=fend, t1=duration, method='linear') * 1.5
+    return scipy.signal.chirp(t, f0=fstart, f1=fend, t1=duration, method='linear') * 0.8
 
 def OFDM_pilot(length):
     """
@@ -48,35 +50,35 @@ def noise(length):
     noise = np.random.normal(0, 1, length).astype('float32')
     return noise
 
-"-------------------------------Emission Code-----------------------------------"
+"-------------------------------Sequence Code-----------------------------------"
 
 #print(OFDM_pilot(4))
 
 def sequence_generator(length = None):
-    if length is None:
+    if length is None:#length formula used to ensure time domain output - BLOCK_LENGTH - check carefully when
+    #changing block_length that variable "length" is still even - if not then length calculation is wrong
         length = int((BLOCK_LENGTH + 2) / 2)
 
     silence = np.zeros(int(0.05 * SAMPLE_RATE))
-    symbol = OFDM_pilot(length)*50
-    #length formula used to ensure a block length - check carefully is changing block_length that length still = even 
+    symbol = OFDM_pilot(length)*15 # used arbitrary factor of 50 to amplify the OFDM generated noise
     prefixed_symbol = np.concatenate((symbol[-CP:],symbol ))
     chirp_start = chirp(20,15000, 2, fs = SAMPLE_RATE)
     chirp_end = chirp(15000,20, 2, fs = SAMPLE_RATE)
     
 
     signal = np.concatenate((silence, chirp_start, prefixed_symbol, np.tile(symbol, 3), chirp_end), axis=0) # may need a prefix for chirp_end at some point
-    return signal
+    return signal, chirp_start, chirp_end
 
 
 
-
+"-------------------------------Emission Code-----------------------------------"
 
 
 if __name__ == "__main__":
     # signal generation test + amplitude plot
-    print(sequence_generator())
+    ##print(sequence_generator())
     plt.figure(figsize=(10, 4))
-    plt.plot(np.abs(sequence_generator()))
+    plt.plot(np.abs(sequence_generator()[0]))
     plt.title('Signal Plot')
     plt.xlabel('Sample Index')
     plt.ylabel('Amplitude')
@@ -84,9 +86,10 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.show()
 
-
-sd.play(sequence_generator(), samplerate=SAMPLE_RATE)
+#save to a .wav file, and play back using audacity, as this (supposedly) avoids noise cancelling behaviour
+write('signal.wav', SAMPLE_RATE, sequence_generator()[0])
+#sd.play(sequence_generator()[0], samplerate=SAMPLE_RATE)
 #sd.play(chirp(100,20000,2,SAMPLE_RATE), samplerate=SAMPLE_RATE)
 #sd.play(noise(BLOCK_LENGTH*20), samplerate=SAMPLE_RATE)
-sd.wait()
+#sd.wait()
 
