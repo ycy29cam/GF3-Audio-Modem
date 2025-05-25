@@ -1,7 +1,8 @@
 import subprocess
+import sys
 
-if __name__ == "__main__": # used to skip emitter-reciever to work on prerecorded data
-    subprocess.run("Constants.py", shell=True)
-    # subprocess.run("emitter.py", shell=True)
-    # subprocess.run("reciever.py", shell=True)
-    subprocess.run("decoder.py", shell = True)
+if __name__ == "__main__":
+    subprocess.run([sys.executable, "Constants.py"])
+    subprocess.run([sys.executable, "emitter.py"])
+    # subprocess.run([sys.executable, "reciever.py"])
+    # subprocess.run([sys.executable, "decoder.py"])
