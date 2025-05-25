@@ -52,14 +52,12 @@ def noise(length):
 
 "-------------------------------Sequence Code-----------------------------------"
 
-#print(OFDM_pilot(4))
-
 def sequence_generator(length = None):
     if length is None:#length formula used to ensure time domain output - BLOCK_LENGTH - check carefully when
     #changing block_length that variable "length" is still even - if not then length calculation is wrong
         length = int((BLOCK_LENGTH + 2) / 2)
 
-    silence = np.zeros(int(0.05 * SAMPLE_RATE))
+    silence = np.zeros(int(1 * SAMPLE_RATE))
     symbol = OFDM_pilot(length)*15 # used arbitrary factor of 50 to amplify the OFDM generated noise
     prefixed_symbol = np.concatenate((symbol[-CP:],symbol ))
     chirp_start = chirp(20,15000, 2, fs = SAMPLE_RATE)
@@ -88,6 +86,8 @@ if __name__ == "__main__":
 
 #save to a .wav file, and play back using audacity, as this (supposedly) avoids noise cancelling behaviour
 write('signal.wav', SAMPLE_RATE, sequence_generator()[0])
+
+
 #sd.play(sequence_generator()[0], samplerate=SAMPLE_RATE)
 #sd.play(chirp(100,20000,2,SAMPLE_RATE), samplerate=SAMPLE_RATE)
 #sd.play(noise(BLOCK_LENGTH*20), samplerate=SAMPLE_RATE)
