@@ -1,47 +1,64 @@
 from emitter import *
 from reciever import *
 import numpy as np
+import scipy
 labels = np.load("labels.npy")
+
+print(len(labels))
 
 def Chopped_array(recorded_array = None):
     """
     truncates recorded signal by removing chirps and returning a chopped array of prediced sequence blocks
     accomodates non equal block lengths using block_length + also removes prefixes if there are any
     :return chopped_array: nested list of OFDM symbols - used for time domain
-    """
+    
     if recorded_array == None:
         recorded_array = recording
-    recorded_array = recorded_array[start_bin:end_bin - len(chirp_end)]# effectively removes start chirp + end chirp
+    """
+    recorded_array = recorded_array[start_bin:end_bin - len(chirp_end)][0]# effectively removes start chirp + end chirp
     
+    print("Shape of recording: ", np.asarray(recorded_array).shape)
+
     chopped_array = []
+
+    for i in block_lengths:
+         print("Block length: ", i)
+
     #further down the line will need to correct for drift, and recompute synchronised position - probably OK over 3 blocks though
     cumulative_block_lengths = np.cumsum(block_lengths) # creates a sum of lengths for easy indexing
     cumulative_block_lengths = np.insert(cumulative_block_lengths, 0, 0)
+
+    for j in cumulative_block_lengths:
+         print("Cumulative sum: ", j)
+
     for i in range(len(block_lengths)):
-        block = signal[cumulative_block_lengths[i-1]:cumulative_block_lengths[i]]
-        if block_type_ids[i] == 2:
+        block = recorded_array[cumulative_block_lengths[i]:cumulative_block_lengths[i+1]]
+        if block_type_ids[i] == 2: #add other prefix indices
              block = block[CP:]
         else:
              pass
+        print("Length of OFDM block: ", len(block))
         chopped_array.append(block)
     return chopped_array
 
 def compute_freq_symbols(chopped_array): #finds frequencies of a single chopped block
     frequency_array = []
     for i in chopped_array:
-         freq_block_with_conjugates = np.fft.fft(i)
+         print("Shape of i in chopped array: ", np.asarray(i).shape)
+         freq_block_with_conjugates = scipy.fft.fft(i, n=length)
          freq_block = freq_block_with_conjugates[:length] # takes only relevant conjugate part, assuming all have the same symbol length
          frequency_array.append(freq_block)
+         print("No symmetry: ", len(freq_block))
     return frequency_array
 
 def transmission_visualisation(sequence: np.array, label: np.array):
     # Assume that sequence is always 2D
     
-    if sequence.shape[1] != labels.shape[0]:
+    if np.asarray(sequence).shape[1] != labels.shape[0]:
          raise ValueError("The decoded block length doesn't match the label length")
 
-    points = sequence.flatten()
-    extend_labels = np.repeat(labels, sequence.shape[0])
+    points = np.asarray(sequence).flatten()
+    extend_labels = np.repeat(labels, np.asarray(sequence).shape[0])
 
     plt.figure(figsize=(6, 6))
     scatter = plt.scatter(points.real, points.imag, c=extend_labels, edgecolors='k', alpha=0.7)
@@ -96,11 +113,15 @@ if __name__ == "__main__":
         # processing prerecorded data
         # do some import bullshit tomorrow to reduce the amount of renamed variables    
         SAMPLE_RATE, recording = read('signal_recorded_2.wav')
+        print(SAMPLE_RATE)
         start_bin, end_bin, sync_start_data, sync_end_data = sync(recording)
         signal, chirp_start, chirp_end, block_lengths, length, block_type_ids, BLOCK_TYPES, pattern_signal  = sequence_generator()
-        chopped_array = Chopped_array()
+        chopped_array = Chopped_array(recording)
+        print(chopped_array[0])
+        print(np.asarray(compute_freq_symbols(chopped_array)).shape)
         plt.plot(recording) # right, basically issue of loudness, ask tomorrow
         plt.show()
+        transmission_visualisation(compute_freq_symbols(chopped_array), labels)
         # frequency_array = compute_freq_symbols(chopped_array)
         # symbol_map = OFDM_pilot()[1]
         # print(channel_estimation(frequency_array))
