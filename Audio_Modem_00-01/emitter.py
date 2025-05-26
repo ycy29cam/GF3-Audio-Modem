@@ -44,7 +44,7 @@ def OFDM_pilot(length = None):
     x[[0,-1]] = [0,0] # ensures 0 mean conjugate symmetric signal
     x = np.asarray(x, dtype=np.complex128) # ensures the generated data is an array
     y = np.concatenate([x, np.conj(x[-2:0:-1])]) # y is useful data with conjugate symmetry in freq domain
-    return np.real(scipy.fft.ifft(y)), symbol_map, length , #computes IFFT of the data
+    return np.real(scipy.fft.ifft(y)), symbol_map, length  #computes IFFT of the data
 
 
 def noise(length):

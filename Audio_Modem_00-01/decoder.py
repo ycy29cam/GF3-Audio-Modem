@@ -35,7 +35,7 @@ def compute_freq_symbols(chopped_array): #finds frequencies of a single chopped 
          frequency_array.append(freq_block)
     return frequency_array
 
-def channel_estimation(frequency_array):
+def channel_estimation(frequency_array): #change to sent array
     red = []
     yellow = []
     green = []
@@ -60,9 +60,8 @@ def channel_estimation(frequency_array):
 
 
 
-#and compute DFT
-# plot each frequency decoded block, assigning a different colour to each decoded symbol as to what the symbol should
-# be from the input (i.e. yellow = 1 + i was meant to be recieved, ect...)
+#. wav recorded too quiet, and needs truncating to remove Noise cancelling. small amplitude causing FFT not to work properly - amplify. wav file + cut off 
+
 # use ML estimation to estimate H(w) and then use a weiner filter to make it better with some good value of SNR
 # don't worry too much about LPDC yet, it will come with time
 
@@ -72,13 +71,14 @@ if __name__ == "__main__":
         # processing prerecorded data
         # do some import bullshit tomorrow to reduce the amount of renamed variables    
         SAMPLE_RATE, recording = read('signal_recorded_2.wav')
+        # recording = recording[int(SAMPLE_RATE*1.5):] find another way to correct/compensate for the big ass spikes
         start_bin, end_bin, sync_start_data, sync_end_data = sync(recording)
         signal, chirp_start, chirp_end, block_lengths, length, block_type_ids, BLOCK_TYPES, pattern_signal  = sequence_generator()
         chopped_array = Chopped_array()
         plt.plot(recording) # right, basically issue of loudness, ask tomorrow
         plt.show()
-        # frequency_array = compute_freq_symbols(chopped_array)
-        # symbol_map = OFDM_pilot()[1]
-        # print(channel_estimation(frequency_array))
+        frequency_array = compute_freq_symbols(chopped_array)
+        symbol_map = OFDM_pilot()[1]
+        print(channel_estimation(frequency_array))
 
 
