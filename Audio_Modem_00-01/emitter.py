@@ -153,6 +153,8 @@ def sequence_generator(pattern=None):
     prefixed_symbol = np.concatenate((symbol[-CP:], symbol))
     chirp_start = chirp(20, 15000, 2, fs=SAMPLE_RATE)
     chirp_end = chirp(15000, 20, 2, fs=SAMPLE_RATE)
+    POST_SILENCE_SEC = 0.5                                                 ## added
+    post_silence = np.zeros(int(SAMPLE_RATE * POST_SILENCE_SEC))           ## added
 
     # Block type to actual signal
     block_library = {
@@ -164,7 +166,7 @@ def sequence_generator(pattern=None):
     }
 
     # Build final sequence
-    block_sequence = [0, 1] + pattern + [4]  # Start with silence, chirp_start; end with chirp_end
+    block_sequence = [0, 1] + pattern + [4,0]  # Start with silence, chirp_start; end with chirp_end (+ added silence)
 
     blocks = [block_library[t] for t in block_sequence] # creates a nested list of blocks
     pattern_blocks = [block_library[t] for t in pattern] # creates a nested list of pattern blocks
