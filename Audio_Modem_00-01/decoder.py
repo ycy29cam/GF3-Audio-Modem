@@ -3,6 +3,8 @@ from reciever import *
 import numpy as np
 import scipy
 labels = np.load("labels.npy")
+pilot = np.load("pilot.npy")
+print("Shape of pilot: ", pilot.shape)
 
 print(len(labels))
 
@@ -15,7 +17,7 @@ def Chopped_array(recorded_array = None):
     if recorded_array == None:
         recorded_array = recording
     """
-    recorded_array = recorded_array[start_bin:end_bin - len(chirp_end)][0]# effectively removes start chirp + end chirp
+    recorded_array = recorded_array[start_bin:end_bin - len(chirp_end),0]# effectively removes start chirp + end chirp
     
     print("Shape of recording: ", np.asarray(recorded_array).shape)
 
@@ -60,6 +62,9 @@ def transmission_visualisation(sequence: np.array, label: np.array):
     points = np.asarray(sequence).flatten()
     extend_labels = np.repeat(labels, np.asarray(sequence).shape[0])
 
+    print("Length of labels: ", len(extend_labels))
+    print("Length of symbols: ", len(points))
+
     plt.figure(figsize=(6, 6))
     scatter = plt.scatter(points.real, points.imag, c=extend_labels, edgecolors='k', alpha=0.7)
 
@@ -69,7 +74,7 @@ def transmission_visualisation(sequence: np.array, label: np.array):
     plt.ylabel("Quadrature (Imag)")
     plt.title("Complex Symbols Colored by Column Labels")
     plt.grid(True)
-    plt.gca().set_aspect('equal')
+    # plt.gca().set_aspect('equal')
 
     plt.show()
     return
@@ -117,11 +122,47 @@ if __name__ == "__main__":
         start_bin, end_bin, sync_start_data, sync_end_data = sync(recording)
         signal, chirp_start, chirp_end, block_lengths, length, block_type_ids, BLOCK_TYPES, pattern_signal  = sequence_generator()
         chopped_array = Chopped_array(recording)
+
+        # --------------------------------------------------------------------------------------------------------------
+
+        frequency_array = np.asarray(compute_freq_symbols(chopped_array))
+        mean_array = np.mean(np.stack(frequency_array, axis=0), axis=0)
+        channel = mean_array / pilot
+
+        # --------------------------------------------------------------------------------------------------------------
+
+        print("Mean array shape: ", mean_array.shape)
         print(chopped_array[0])
-        print(np.asarray(compute_freq_symbols(chopped_array)).shape)
+        print("Shape of frequency array (FFT'ed)", np.asarray(compute_freq_symbols(chopped_array)).shape)
         plt.plot(recording) # right, basically issue of loudness, ask tomorrow
         plt.show()
+
+        plt.plot(channel)
+        plt.show()
+
+        # --------------------------------------------------------------------------------------------------------------
+
         transmission_visualisation(compute_freq_symbols(chopped_array), labels)
+
+        # --------------------------------------------------------------------------------------------------------------
+
+        points = frequency_array.flatten()
+        extend_labels = np.repeat(labels, frequency_array.shape[0])
+        extend_channel = np.repeat(channel, frequency_array.shape[0])
+
+        points /= extend_channel
+
+        plt.figure(figsize=(6, 6))
+
+        scatter = plt.scatter(points.real, points.imag, c=extend_labels, edgecolors='k', alpha=0.7)
+        plt.axhline(0, color='gray', linestyle='--')
+        plt.axvline(0, color='gray', linestyle='--')
+        plt.xlabel("In-Phase (Real)")
+        plt.ylabel("Quadrature (Imag)")
+        plt.title("Complex Symbols Colored by Column Labels")
+        plt.grid(True)
+
+        plt.show()
         # frequency_array = compute_freq_symbols(chopped_array)
         # symbol_map = OFDM_pilot()[1]
         # print(channel_estimation(frequency_array))
