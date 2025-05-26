@@ -42,10 +42,10 @@ def OFDM_pilot(length = None):
     }
 
     label_map = {
-        (0, 0): 1,
-        (0, 1): 2,
-        (1, 1): 3,
-        (1, 0): 4
+        (0, 0): "green",
+        (0, 1): "yellow",
+        (1, 1): "red",
+        (1, 0): "blue"
     }
 
     labels = np.array([label_map[tuple(b)] for b in B_matrix]) # Generate colour assignment
@@ -205,7 +205,7 @@ if __name__ == "__main__":
     plt.show()
 
 #save to a .wav file, and play back using audacity, as this (supposedly) avoids noise cancelling behaviour
-write('testsignal.wav', SAMPLE_RATE, sequence_generator()[0])
+# write('testsignal.wav', SAMPLE_RATE, sequence_generator()[0])
 
 
 #sd.play(sequence_generator()[0], samplerate=SAMPLE_RATE)

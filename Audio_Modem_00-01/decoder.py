@@ -1,6 +1,7 @@
 from emitter import *
 from reciever import *
-
+import numpy as np
+labels = np.load("labels.npy")
 
 def Chopped_array(recorded_array = None):
     """
@@ -25,8 +26,6 @@ def Chopped_array(recorded_array = None):
         chopped_array.append(block)
     return chopped_array
 
-
-
 def compute_freq_symbols(chopped_array): #finds frequencies of a single chopped block
     frequency_array = []
     for i in chopped_array:
@@ -35,6 +34,30 @@ def compute_freq_symbols(chopped_array): #finds frequencies of a single chopped 
          frequency_array.append(freq_block)
     return frequency_array
 
+def transmission_visualisation(sequence: np.array, label: np.array):
+    # Assume that sequence is always 2D
+    
+    if sequence.shape[1] != labels.shape[0]:
+         raise ValueError("The decoded block length doesn't match the label length")
+
+    points = sequence.flatten()
+    extend_labels = np.repeat(labels, sequence.shape[0])
+
+    plt.figure(figsize=(6, 6))
+    scatter = plt.scatter(points.real, points.imag, c=extend_labels, edgecolors='k', alpha=0.7)
+
+    plt.axhline(0, color='gray', linestyle='--')
+    plt.axvline(0, color='gray', linestyle='--')
+    plt.xlabel("In-Phase (Real)")
+    plt.ylabel("Quadrature (Imag)")
+    plt.title("Complex Symbols Colored by Column Labels")
+    plt.grid(True)
+    plt.gca().set_aspect('equal')
+
+    plt.show()
+    return
+
+"""
 def channel_estimation(frequency_array):
     red = []
     yellow = []
@@ -57,6 +80,7 @@ def channel_estimation(frequency_array):
                 raise ValueError(f"Unexpected complex value at ({i}, {j}): {z}")
 
     return red, yellow, green, blue
+"""
 
 
 
