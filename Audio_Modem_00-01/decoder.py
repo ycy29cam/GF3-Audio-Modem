@@ -47,7 +47,7 @@ def compute_freq_symbols(chopped_array): #finds frequencies of a single chopped 
     frequency_array = []
     for i in chopped_array:
          print("Shape of i in chopped array: ", np.asarray(i).shape)
-         freq_block_with_conjugates = scipy.fft.fft(i, n=length)
+         freq_block_with_conjugates = scipy.fft.fft(i, n=8192)
          freq_block = freq_block_with_conjugates[:length] # takes only relevant conjugate part, assuming all have the same symbol length
          frequency_array.append(freq_block)
          print("No symmetry: ", len(freq_block))
@@ -117,7 +117,7 @@ def channel_estimation(frequency_array):
 if __name__ == "__main__":
         # processing prerecorded data
         # do some import bullshit tomorrow to reduce the amount of renamed variables    
-        SAMPLE_RATE, recording = read('signal_recorded_2.wav')
+        SAMPLE_RATE, recording = read('signal_recorded.wav')
         print(SAMPLE_RATE)
         start_bin, end_bin, sync_start_data, sync_end_data = sync(recording)
         signal, chirp_start, chirp_end, block_lengths, length, block_type_ids, BLOCK_TYPES, pattern_signal  = sequence_generator()
@@ -166,5 +166,3 @@ if __name__ == "__main__":
         # frequency_array = compute_freq_symbols(chopped_array)
         # symbol_map = OFDM_pilot()[1]
         # print(channel_estimation(frequency_array))
-
-

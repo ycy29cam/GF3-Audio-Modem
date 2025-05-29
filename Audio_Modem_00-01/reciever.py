@@ -8,6 +8,7 @@ def sync(recording, chirp_start = None, chirp_end = None):  # use cross correlat
         chirp_start = sequence_generator()[1]
     if chirp_end is None: 
         chirp_end = sequence_generator()[2]
+    print("Recording shape in sync: ", np.asarray(recording).shape)
     channel_1 = recording[int(SAMPLE_RATE*1):, 0] # extracts signal recieved from audio channel 1 for processing, removes starting
     # artifacts by removing 1s of recording
     sync_start = scipy.signal.correlate(channel_1,chirp_start, mode='full', method='auto')
