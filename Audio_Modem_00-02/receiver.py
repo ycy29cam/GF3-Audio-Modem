@@ -23,6 +23,10 @@ PILOT_NPY       = 'pilot_symbols.npy'
 COLMAP_NPY      = 'colour_map.npy'
 CHAN_NPY        = 'channel_estimate.npy'
 
+CHIRP_ATTEN      = 0.80            # scale applied to both chirps
+TARGET_PEAK      = 0.80            # peak of every OFDM block after scaling
+LENGTH_TOL       = 512  
+
 def record_audio(expected_len:int, fs:int=FS) -> np.ndarray:
     print(f"Recording ≈{expected_len/fs:.2f} s …")
     rec = sd.rec(expected_len, samplerate=fs, channels=1,
@@ -30,6 +34,11 @@ def record_audio(expected_len:int, fs:int=FS) -> np.ndarray:
     sd.wait()
     sf.write(WAV_RX, rec, fs)
     return rec
+
+def load_wav(path):
+    data, sr = sf.read(path, always_2d=False)
+    assert sr == FS, "sample-rate mismatch"
+    return data.astype(np.float32)
 
 def synchronise(rx:np.ndarray,
                 chirp_up:np.ndarray,
@@ -47,23 +56,22 @@ def synchronise(rx:np.ndarray,
 
     start_payload = peak_up + len(chirp_up)
     end_payload   = peak_down                    # start of down-chirp
-    payload       = rx[start_payload:end_payload]
+    payload = rx[start_payload:end_payload]
+    exp = CP_LEN + TX_REPS*FFT_LEN
+    if len(payload) > exp + LENGTH_TOL:
+        payload = payload[:exp]              # crop
+    elif len(payload) < exp - LENGTH_TOL:
+        raise RuntimeError(f"payload {len(payload)} << expected {exp}")
+    elif len(payload) < exp:                 # pad
+        payload = np.pad(payload, (0, exp-len(payload)))
     return payload, start_payload, end_payload
 
-def split_ofdm_blocks(payload:np.ndarray,
-                      fft_len:int=FFT_LEN,
-                      cp_len:int=CP_LEN,
-                      reps:int=TX_REPS) -> np.ndarray:
-    """Layout: CP+FFT_LEN + (reps-1)*FFT_LEN."""
-    expected = cp_len + reps*fft_len
-    if len(payload) < expected:
-        raise RuntimeError(f"Payload too short ({len(payload)} < {expected})")
-
+def ofdm_blocks(payload):
     blocks = []
-    idx = cp_len
-    for _ in range(reps):
-        blocks.append(payload[idx : idx+fft_len])
-        idx += fft_len
+    idx = CP_LEN
+    for _ in range(TX_REPS):
+        blocks.append(payload[idx:idx+FFT_LEN])
+        idx += FFT_LEN
     return np.stack(blocks)
 
 def freq_domain(blocks_td:np.ndarray) -> np.ndarray:
@@ -87,8 +95,9 @@ def spectrum_plot(sig:np.ndarray, fs:int=FS):
 
 def constellation_plot(eq_fd:np.ndarray):
     col = np.load(COLMAP_NPY)
+    colours = np.tile(col, TX_REPS)
     plt.figure(); plt.axhline(0,c='k'); plt.axvline(0,c='k')
-    plt.scatter(eq_fd.real, eq_fd.imag, c=col,
+    plt.scatter(eq_fd.real, eq_fd.imag, c=colours,
                 s=10, alpha=.85, edgecolors='none')
     plt.title("Equalised constellation"); plt.xlabel("I"); plt.ylabel("Q")
     plt.gca().set_aspect('equal'); plt.tight_layout(); plt.show()
@@ -101,8 +110,9 @@ chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
 print(len(recording))
 sync = synchronise(recording, chirp_up, chirp_down)
 print(sync)
+print(sync[0], sync[1], sync[2])
 
-split_block = split_ofdm_blocks(sync[0])
+split_block = ofdm_blocks(sync[0])
 freq_block = freq_domain(split_block)
 channel = channel_estimate(freq_block, np.load("pilot_symbols.npy"))
 eq_block = equalise(freq_block, channel)
