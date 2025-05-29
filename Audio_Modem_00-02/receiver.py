@@ -93,7 +93,9 @@ def constellation_plot(eq_fd:np.ndarray):
     plt.title("Equalised constellation"); plt.xlabel("I"); plt.ylabel("Q")
     plt.gca().set_aspect('equal'); plt.tight_layout(); plt.show()
 
-SAMPLE_RATE, recording = read('tx_sequence.wav')
+# record_audio(480000)
+
+SAMPLE_RATE, recording = read('rx_recording.wav')
 
 chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
 chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
