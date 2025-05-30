@@ -17,7 +17,7 @@ def Chopped_array(recorded_array = None):
     if recorded_array == None:
         recorded_array = recording
     """
-    recorded_array = recorded_array[start_bin:end_bin - len(chirp_end),0]# effectively removes start chirp + end chirp
+    recorded_array = recorded_array[start_bin:end_bin - len(chirp_end),0]# effectively removes start chirp + end chirp "not just a nin start/end issue"
     
     print("Shape of recording: ", np.asarray(recorded_array).shape)
 
@@ -72,7 +72,7 @@ def transmission_visualisation(sequence: np.array, label: np.array):
     plt.axvline(0, color='gray', linestyle='--')
     plt.xlabel("In-Phase (Real)")
     plt.ylabel("Quadrature (Imag)")
-    plt.title("Complex Symbols Colored by Column Labels")
+    plt.title("1Complex Symbols Colored by Column Labels")
     plt.grid(True)
     # plt.gca().set_aspect('equal')
 
@@ -117,8 +117,11 @@ def channel_estimation(frequency_array):
 if __name__ == "__main__":
         # processing prerecorded data
         # do some import bullshit tomorrow to reduce the amount of renamed variables    
-        SAMPLE_RATE, recording = read('signal_recorded_2.wav')
+        SAMPLE_RATE, recording = read('signal_recorded.wav')
         print(SAMPLE_RATE)
+        #fudge factor to get recording in right shape, just for my recorded recording
+        recording = np.stack((recording, np.zeros_like(recording)), axis=1)
+        print ("the shape of the recorded array is", recording.shape)
         start_bin, end_bin, sync_start_data, sync_end_data = sync(recording)
         signal, chirp_start, chirp_end, block_lengths, length, block_type_ids, BLOCK_TYPES, pattern_signal  = sequence_generator()
         chopped_array = Chopped_array(recording)
@@ -134,7 +137,7 @@ if __name__ == "__main__":
         print("Mean array shape: ", mean_array.shape)
         print(chopped_array[0])
         print("Shape of frequency array (FFT'ed)", np.asarray(compute_freq_symbols(chopped_array)).shape)
-        plt.plot(recording) # right, basically issue of loudness, ask tomorrow
+        plt.plot(recording) 
         plt.show()
 
         plt.plot(channel)
@@ -159,7 +162,7 @@ if __name__ == "__main__":
         plt.axvline(0, color='gray', linestyle='--')
         plt.xlabel("In-Phase (Real)")
         plt.ylabel("Quadrature (Imag)")
-        plt.title("Complex Symbols Colored by Column Labels")
+        plt.title("2Complex Symbols Colored by Column Labels")
         plt.grid(True)
 
         plt.show()
