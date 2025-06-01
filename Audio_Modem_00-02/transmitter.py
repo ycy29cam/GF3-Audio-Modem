@@ -5,13 +5,14 @@ import soundfile as sf
 import matplotlib.pyplot as plt
 from scipy import signal, fft
 
+
 FS              = 48_000         # audio sample-rate (Hz)
 FFT_LEN         = 8192           # size of one OFDM symbol (must be even)
 CP_LEN          = FFT_LEN // 4   # cyclic-prefix length
 CHIRP_LEN_S     = 2              # chirp duration (seconds)
 SILENCE_LEN_S   = 1.0  
 F0, F1          = 20, 15000      # chirp start / end frequencies (Hz)
-TX_REPS         = 4              # 1 pilot + 3 identical data blocks
+TX_REPS         = 8              # 1 pilot + 7 identical data blocks
 WAV_TX          = 'tx_sequence.wav'
 WAV_RX          = 'rx_recording.wav'
 PILOT_NPY       = 'pilot_symbols.npy'
@@ -55,7 +56,7 @@ def to_real_ofdm_block(freq_syms, n=FFT_LEN):
 def add_cyclic_prefix(x:np.ndarray, cp_len:int=CP_LEN) -> np.ndarray:
     return np.concatenate([x[-cp_len:], x])
 
-def prepare_tx_sequence(plt) -> dict:
+def prepare_tx_sequence() -> dict:
     # ------------- build pieces -------------
     silence     = np.zeros(int(SILENCE_LEN_S * FS), np.float32)
     chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
@@ -77,16 +78,14 @@ def prepare_tx_sequence(plt) -> dict:
         chirp_down
     ])
     # plot of the waveform
-    if plt == True:
-        plt = plt.figure(figsize=(10,3))
-        sf.write(WAV_TX, sequence, FS)
-        plt.figure(figsize=(10,3))
-        plt.plot(sequence, lw=.7)
-        plt.title("Transmit waveform (time domain)")
-        plt.xlabel("sample"); plt.ylabel("amplitude")
-        plt.tight_layout(); plt.show()
-    else:
-        pass
+
+    # plt = plt.figure(figsize=(10,3))
+    sf.write(WAV_TX, sequence, FS)
+    plt.figure(figsize=(10,3))
+    plt.plot(sequence, lw=.7)
+    plt.title("Transmit waveform (time domain)")
+    plt.xlabel("sample"); plt.ylabel("amplitude")
+    plt.tight_layout(); plt.show()
 
     info = {
         "leading_silence_samples": len(silence),
@@ -103,7 +102,7 @@ def prepare_tx_sequence(plt) -> dict:
 def play_audio(sig:np.ndarray, fs:int=FS):
     sd.play(sig, fs); sd.wait()
 
-output = prepare_tx_sequence(plt = False)
+output = prepare_tx_sequence()
 print(output["waveform"])
 print(output["info"])
 
