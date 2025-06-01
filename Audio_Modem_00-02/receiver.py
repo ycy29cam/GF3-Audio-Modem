@@ -26,7 +26,7 @@ CHAN_NPY        = 'channel_estimate.npy'
 
 CHIRP_ATTEN     = 0.80
 TARGET_PEAK     = 0.80
-LENGTH_TOL      = 512
+LENGTH_TOL      = 512 # might be worth reducing this, bit error length ~ 2 to 5 bits
 
 # ------------------------------------------------
 #   2.  I/O helpers  (unchanged)
@@ -34,13 +34,13 @@ LENGTH_TOL      = 512
 def record_audio(expected_len:int, fs:int=FS) -> np.ndarray:
     print(f"Recording ≈{expected_len/fs:.2f} s …")
     rec = sd.rec(expected_len, samplerate=fs, channels=1,
-                 dtype='float32').squeeze()
+                 dtype='float32').squeeze() #removes extra unused dimension
     sd.wait()
     sf.write(WAV_RX, rec, fs)
     return rec
 
 def load_wav(path):
-    data, sr = sf.read(path, always_2d=False)
+    data, sr = sf.read(path, always_2d=False) #sr is sample-rate of recording
     assert sr == FS, "sample-rate mismatch"
     return data.astype(np.float32)
 
@@ -49,20 +49,20 @@ def load_wav(path):
 # ------------------------------------------------
 def synchronise(rx:np.ndarray,
                 chirp_up:np.ndarray,
-                chirp_down:np.ndarray) -> tuple[np.ndarray,int,int]:
+                chirp_down:np.ndarray) -> tuple[np.ndarray,int,int]: # colon tells you what type the function takes, and arrow tells you what the function returns
     corr_up   = signal.correlate(rx, chirp_up,   mode='valid')
     peak_up   = np.argmax(corr_up)
 
     corr_down = signal.correlate(rx, chirp_down, mode='valid')
-    search_from = peak_up + len(chirp_up)
-    peak_down = np.where(corr_down > 0.8*corr_down.max())[0]
+    search_from = peak_up + len(chirp_up) # search for down-chirp after up-chirp
+    peak_down = np.where(corr_down > 0.8*corr_down.max())[0] #formatting, 2D - 1D but no information loss
     peak_down = peak_down[peak_down > search_from][0]
 
     start_payload = peak_up + len(chirp_up)
     end_payload   = peak_down
     payload = rx[start_payload:end_payload]
-    exp = CP_LEN + TX_REPS*FFT_LEN
-    if len(payload) > exp + LENGTH_TOL:
+    exp = CP_LEN + TX_REPS*FFT_LEN # make more robust, pull length from output dictionary 
+    if len(payload) > exp + LENGTH_TOL: # missing a statement for len(payload)< exp + LENGTH_TOL & len(payload) > exp
         payload = payload[:exp]
     elif len(payload) < exp - LENGTH_TOL:
         raise RuntimeError(f"payload {len(payload)} << expected {exp}")
@@ -74,13 +74,13 @@ def synchronise(rx:np.ndarray,
 #   4.  OFDM helpers  (unchanged)
 # ------------------------------------------------
 def ofdm_blocks(payload):
-    blocks, idx = [], CP_LEN
+    blocks, idx = [], CP_LEN # idx = index 
     for _ in range(TX_REPS):
-        blocks.append(payload[idx:idx+FFT_LEN]); idx += FFT_LEN
+        blocks.append(payload[idx:idx+FFT_LEN]); idx += FFT_LEN # need to remove cyclic prefix first
     return np.stack(blocks)
 
 def freq_domain(blocks_td:np.ndarray) -> np.ndarray:
-    return fft.fft(blocks_td, axis=1)[:, 1:FFT_LEN//2]
+    return fft.fft(blocks_td, axis=1)[:, 1:FFT_LEN//2] #trimming to get useful part, removing 0 DC component and Nyquist frequency
 
 # ------------------------------------------------
 #   5.  Channel estimation  (NEW options)          <<< changed

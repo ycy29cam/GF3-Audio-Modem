@@ -32,10 +32,10 @@ def generate_chirp(f0, f1, dur, fs=FS):
     return (CHIRP_ATTEN*signal.chirp(t, f0, t[-1], f1)).astype(np.float32)
 
 def random_bitpairs(n):
-    return np.random.randint(0, 2, size=(n,2), dtype=np.int8)
+    return np.random.randint(0, 2, size=(n,2), dtype=np.int8) #worth adding a seed for reproducibility
 
 def qpsk_gray(bitpairs):
-    mapping = {(0,0):-1-1j, (0,1):-1+1j, (1,1):1+1j, (1,0):-1j+1}
+    mapping = {(0,0):1+1j, (0,1):1-1j, (1,1):-1-1j, (1,0):-1+1j}
     syms    = np.array([mapping[tuple(b)] for b in bitpairs], np.complex64)
     colours = np.array([Q_COL[tuple(b)]  for b in bitpairs])
     np.save(COLMAP_NPY, colours)
@@ -61,13 +61,13 @@ def prepare_tx_sequence() -> dict:
     chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
 
     n_qpsk      = FFT_LEN//2 - 1
-    bits        = random_bitpairs(n_qpsk)
+    bits        = random_bitpairs(n_qpsk)            # where data symbols go in
     pilot, colour       = qpsk_gray(bits)            # also stores colour map
     np.save(PILOT_NPY, pilot)
 
     blk_td      = to_real_ofdm_block(pilot)
-    blk_td_cp   = add_cyclic_prefix(blk_td)  # CP only on first block
-
+    blk_td_cp   = add_cyclic_prefix(blk_td)  # CP only on first block 
+    
     sequence = np.concatenate([
         silence,
         chirp_up,

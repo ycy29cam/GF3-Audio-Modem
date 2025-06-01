@@ -4,6 +4,7 @@ from scipy import signal, fft
 from scipy.io.wavfile import read
 
 import transmitter as tx          # <-- reuse every constant & helper!
+#add a from reciver import * here, to avoid duplicate copies of helpers in reciever
 
 FS            = tx.FS
 FFT_LEN       = tx.FFT_LEN

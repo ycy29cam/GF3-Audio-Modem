@@ -17,7 +17,7 @@ def Chopped_array(recorded_array = None):
     if recorded_array == None:
         recorded_array = recording
     """
-    recorded_array = recorded_array[start_bin:end_bin - len(chirp_end),0]# effectively removes start chirp + end chirp "not just a nin start/end issue"
+    recorded_array = recorded_array[start_bin + len(chirp_start):end_bin ,0]# effectively removes start chirp + end chirp "not just a nin start/end issue"
     
     print("Shape of recording: ", np.asarray(recorded_array).shape)
 
