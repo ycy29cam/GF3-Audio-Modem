@@ -32,6 +32,7 @@ def generate_chirp(f0, f1, dur, fs=FS):
     return (CHIRP_ATTEN*signal.chirp(t, f0, t[-1], f1)).astype(np.float32)
 
 def random_bitpairs(n):
+    np.random.seed(42)  # for reproducibility
     return np.random.randint(0, 2, size=(n,2), dtype=np.int8) #worth adding a seed for reproducibility
 
 def qpsk_gray(bitpairs):
@@ -54,7 +55,7 @@ def to_real_ofdm_block(freq_syms, n=FFT_LEN):
 def add_cyclic_prefix(x:np.ndarray, cp_len:int=CP_LEN) -> np.ndarray:
     return np.concatenate([x[-cp_len:], x])
 
-def prepare_tx_sequence() -> dict:
+def prepare_tx_sequence(plt) -> dict:
     # ------------- build pieces -------------
     silence     = np.zeros(int(SILENCE_LEN_S * FS), np.float32)
     chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
@@ -75,14 +76,17 @@ def prepare_tx_sequence() -> dict:
         np.tile(blk_td, TX_REPS-1),          # three CP-less copies
         chirp_down
     ])
-
-    # write & visualise
-    sf.write(WAV_TX, sequence, FS)
-    plt.figure(figsize=(10,3))
-    plt.plot(sequence, lw=.7)
-    plt.title("Transmit waveform (time domain)")
-    plt.xlabel("sample"); plt.ylabel("amplitude")
-    plt.tight_layout(); plt.show()
+    # plot of the waveform
+    if plt == True:
+        plt = plt.figure(figsize=(10,3))
+        sf.write(WAV_TX, sequence, FS)
+        plt.figure(figsize=(10,3))
+        plt.plot(sequence, lw=.7)
+        plt.title("Transmit waveform (time domain)")
+        plt.xlabel("sample"); plt.ylabel("amplitude")
+        plt.tight_layout(); plt.show()
+    else:
+        pass
 
     info = {
         "leading_silence_samples": len(silence),
@@ -99,7 +103,7 @@ def prepare_tx_sequence() -> dict:
 def play_audio(sig:np.ndarray, fs:int=FS):
     sd.play(sig, fs); sd.wait()
 
-output = prepare_tx_sequence()
+output = prepare_tx_sequence(plt = False)
 print(output["waveform"])
 print(output["info"])
 

@@ -77,6 +77,7 @@ def ofdm_blocks(payload):
     blocks, idx = [], CP_LEN # idx = index 
     for _ in range(TX_REPS):
         blocks.append(payload[idx:idx+FFT_LEN]); idx += FFT_LEN # !make a more robust function that can handle blocks with cyclic prefixes throughout
+    return np.array(blocks)
 
 def freq_domain(blocks_td:np.ndarray) -> np.ndarray:
     return fft.fft(blocks_td, axis=1)[:, 1:FFT_LEN//2] #trimming to get useful part, removing 0 DC component and Nyquist frequency
@@ -131,13 +132,17 @@ def compare_tx_rx(rx:np.ndarray, start:int, end:int, tx_path:str=WAV_TX):
     """
     tx_sig  = load_wav(tx_path)
 
+
     tx_start = int(SILENCE_LEN_S * FS)              # first chirp sample
     seg_len  = end - start                          # length of interest
     tx_seg   = tx_sig[tx_start : tx_start + seg_len]
     rx_seg   = rx[start       : start + seg_len]    # trimmed RX
 
-    m = max(np.max(np.abs(tx_seg)), np.max(np.abs(rx_seg)), 1e-3)
-    tx_seg, rx_seg = tx_seg/m, rx_seg/m
+    m = max(np.max(np.max(np.abs(rx_seg))), 1e-3) # !taking the max of both- why? - have changed it to take the max of both segments
+    n = max(np.max(np.max(np.abs(tx_seg))), 1e-3) 
+    print("this is the max value of tx_seg", np.max(np.abs(tx_seg)))
+    print("this is the max value of rx_seg", np.max(np.abs(rx_seg)), np.argmax(np.abs(rx_seg)))
+    tx_seg, rx_seg = tx_seg/n, rx_seg/m
 
     plt.figure(figsize=(10,3))
     plt.plot(tx_seg, label='TX (norm.)', lw=.8)
@@ -242,7 +247,7 @@ def simple_constellation_plot(eq_fd:np.ndarray):
 
 if __name__ == "__main__":
 
-    record_audio(960000)
+    record_audio(480000)
 
     SAMPLE_RATE, recording = read('rx_recording.wav')
     SAMPLE_RATE, transmission = read("tx_sequence.wav")
