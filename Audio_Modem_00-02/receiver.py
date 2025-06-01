@@ -7,17 +7,17 @@ from matplotlib.patches import Patch
 from scipy import signal, fft
 from scipy.io.wavfile import read
 from transmitter import generate_chirp, WAV_TX          #  <<< changed
-
+import transmitter as tx 
 # ------------------------------------------------
 #   1.  General parameters (unchanged)
 # ------------------------------------------------
-FS              = 48_000
-FFT_LEN         = 8192
-CP_LEN          = FFT_LEN // 4
-CHIRP_LEN_S     = 2
-SILENCE_LEN_S   = 1.0
-F0, F1          = 20, 15000
-TX_REPS         = 4
+FS              = tx.FS
+FFT_LEN         = tx.FFT_LEN
+CP_LEN          = tx.CP_LEN
+CHIRP_LEN_S     = tx.CHIRP_LEN_S
+SILENCE_LEN_S   = tx.SILENCE_LEN_S
+F0, F1          = tx.F0, tx.F1
+TX_REPS         = tx.TX_REPS
 WAV_TX          = WAV_TX                               #  keep same name
 WAV_RX          = 'rx_recording.wav'
 PILOT_NPY       = 'pilot_symbols.npy'
@@ -93,16 +93,19 @@ def channel_estimate(rx_fd:np.ndarray, # !we have to implement this ourselves, n
     method : 'zf' (default) or 'mmse'
     """
     eps = 1e-12
-    Y   = rx_fd[0]
-    if method.lower() == 'mmse':                    #  <<< changed
-        H_zf  = Y / (pilot + eps)
-        Rhh   = np.mean(np.abs(H_zf)**2)
-        H_hat = (Rhh / (Rhh + noise_var)) * H_zf
-    else:                                           #  zero-forcing
-        H_hat = Y / (pilot + eps)
-
-    np.save(CHAN_NPY, H_hat)
+    H_list = []  # list to store channel estimates for each block
+    for i in rx_fd:
+        if method.lower() == 'mmse':                    #  <<< changed
+            H_zf  = i / (pilot + eps)
+            Rhh   = np.mean(np.abs(H_zf)**2)
+            H_hat = (Rhh / (Rhh + noise_var)) * H_zf
+        else:                                           #  zero-forcing
+            H_hat = i / (pilot + eps)
+        H_list.append(H_hat) # append each channel estimate to a list
+    H_hat_av = np.mean(H_list, axis=1)
+    np.save(CHAN_NPY, H_hat_av)
     return H_hat
+
 
 def equalise(rx_fd:np.ndarray, H:np.ndarray) -> np.ndarray:
     return rx_fd / H
@@ -138,11 +141,9 @@ def compare_tx_rx(rx:np.ndarray, start:int, end:int, tx_path:str=WAV_TX):
     tx_seg   = tx_sig[tx_start : tx_start + seg_len]
     rx_seg   = rx[start       : start + seg_len]    # trimmed RX
 
-    m = max(np.max(np.max(np.abs(rx_seg))), 1e-3) # !taking the max of both- why? - have changed it to take the max of both segments
+    m = max(np.max(np.max(np.abs(rx_seg))), 1e-3) 
     n = max(np.max(np.max(np.abs(tx_seg))), 1e-3) 
-    print("this is the max value of tx_seg", np.max(np.abs(tx_seg)))
-    print("this is the max value of rx_seg", np.max(np.abs(rx_seg)), np.argmax(np.abs(rx_seg)))
-    tx_seg, rx_seg = tx_seg/n, rx_seg/m
+    tx_seg, rx_seg = tx_seg/m, rx_seg/m #-#-# normalised amplitudes by respective max values  
 
     plt.figure(figsize=(10,3))
     plt.plot(tx_seg, label='TX (norm.)', lw=.8)
@@ -264,11 +265,6 @@ if __name__ == "__main__":
 
     split_block = ofdm_blocks(sync[0])
     freq_block = freq_domain(split_block)
-
-    ## checking correctness of frequency domain block
-    print(freq_block.shape)
-    print(freq_block[0])  # print first block
-
     channel = channel_estimate(freq_block, np.load("pilot_symbols.npy"), "zf")
     plot_channel(channel)
     eq_block = equalise(freq_block, channel)
