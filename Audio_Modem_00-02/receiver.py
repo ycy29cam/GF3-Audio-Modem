@@ -61,8 +61,8 @@ def synchronise(rx:np.ndarray,
     start_payload = peak_up + len(chirp_up)
     end_payload   = peak_down
     payload = rx[start_payload:end_payload]
-    exp = CP_LEN + TX_REPS*FFT_LEN # make more robust, pull length from output dictionary 
-    if len(payload) > exp + LENGTH_TOL: # missing a statement for len(payload)< exp + LENGTH_TOL & len(payload) > exp
+    exp = CP_LEN + TX_REPS*FFT_LEN # !make more robust, pull length from output dictionary 
+    if len(payload) > exp + LENGTH_TOL: # !missing a statement for len(payload)< exp + LENGTH_TOL & len(payload) > exp
         payload = payload[:exp]
     elif len(payload) < exp - LENGTH_TOL:
         raise RuntimeError(f"payload {len(payload)} << expected {exp}")
@@ -76,8 +76,7 @@ def synchronise(rx:np.ndarray,
 def ofdm_blocks(payload):
     blocks, idx = [], CP_LEN # idx = index 
     for _ in range(TX_REPS):
-        blocks.append(payload[idx:idx+FFT_LEN]); idx += FFT_LEN # need to remove cyclic prefix first
-    return np.stack(blocks)
+        blocks.append(payload[idx:idx+FFT_LEN]); idx += FFT_LEN # !make a more robust function that can handle blocks with cyclic prefixes throughout
 
 def freq_domain(blocks_td:np.ndarray) -> np.ndarray:
     return fft.fft(blocks_td, axis=1)[:, 1:FFT_LEN//2] #trimming to get useful part, removing 0 DC component and Nyquist frequency
@@ -85,8 +84,8 @@ def freq_domain(blocks_td:np.ndarray) -> np.ndarray:
 # ------------------------------------------------
 #   5.  Channel estimation  (NEW options)          <<< changed
 # ------------------------------------------------
-def channel_estimate(rx_fd:np.ndarray,
-                     pilot:np.ndarray,
+def channel_estimate(rx_fd:np.ndarray, # !we have to implement this ourselves, not allowed to use inbuilt functions for channel estimation - we're going to need an extra input to measure SNR
+                     pilot:np.ndarray, # ! check RX is 1 OFDM block, otherwise formula for channhel estimation returns far too long channel estimate
                      method:str='zf',               #  <<< changed
                      noise_var:float=1e-4) -> np.ndarray:
     """
@@ -151,17 +150,17 @@ def compare_tx_rx(rx:np.ndarray, start:int, end:int, tx_path:str=WAV_TX):
 #   7.  Spectrum & constellation (unchanged)
 # ------------------------------------------------
 def _means_by_colour(z_flat, colours_flat):
-    ucols = np.unique(colours_flat)
-    means = {c: np.mean(z_flat[colours_flat == c]) for c in ucols}
-    return means
+    ucols = np.unique(colours_flat) # pulls out an array of the unique(in this case 4 colours) colours used
+    means = {c: np.mean(z_flat[colours_flat == c]) for c in ucols} # finds the mean of each colour in the constellation
+    return means # a dictionary of colour:mean pairs
 
 def spectrum_plot(sig:np.ndarray, fs:int=FS):
     f, Pxx = signal.welch(sig, fs, nperseg=4096)
     plt.figure(); plt.semilogy(f, Pxx)
     plt.title("Received PSD"); plt.xlabel("Hz"); plt.ylabel("PSD [V²/Hz]")
     plt.tight_layout(); plt.show()
-
-def constellation_plot(eq_fd: np.ndarray):
+ 
+def constellation_plot(eq_fd: np.ndarray): # essentially takes in already equalised( i.e channel effects removed) frequency domain symbols and plots them using the transmitter symbol colours - the colours will loop round after base colur length is exceeded so you can plot multiple symbols at once - it also adds a legend to the plot
     # ------------------------------------------------------------
     # 1.  Build a colour array that is **exactly** len(eq_fd)
     # ------------------------------------------------------------
@@ -202,7 +201,7 @@ def constellation_plot(eq_fd: np.ndarray):
     try:
         from transmitter import Q_COL
         colour_map = {v:k for k,v in Q_COL.items()}  # colour→bits
-        label_map  = {'00':'-1-1j','01':'-1+1j','11':'1+1j','10':'1-1j'}
+        label_map  = {'00':'1+1j','01':'1-1j','11':'-1-1j','10':'-1+1j'}
         legend_elems = []
         for c in np.unique(colours):
             bits = ''.join(map(str, colour_map.get(c, ('?','?'))))
@@ -241,28 +240,34 @@ def simple_constellation_plot(eq_fd:np.ndarray):
     plt.gca().set_aspect('equal'); plt.tight_layout(); plt.show()
 
 
+if __name__ == "__main__":
 
-# record_audio(480000)
+    record_audio(960000)
 
-SAMPLE_RATE, recording = read('rx_recording.wav')
-SAMPLE_RATE, transmission = read("tx_sequence.wav")
+    SAMPLE_RATE, recording = read('rx_recording.wav')
+    SAMPLE_RATE, transmission = read("tx_sequence.wav")
 
-chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
-chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
+    chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
+    chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
 
-print(len(recording))
-sync = synchronise(recording, chirp_up, chirp_down)
-print(sync)
-print(sync[0], sync[1], sync[2])
+    print(len(recording))
+    sync = synchronise(recording, chirp_up, chirp_down)
+    print(sync)
+    print(sync[0], sync[1], sync[2]) # payload, start payload, end payload
 
-compare_tx_rx(recording, sync[1], sync[2])
+    compare_tx_rx(recording, sync[1], sync[2])
 
-split_block = ofdm_blocks(sync[0])
-freq_block = freq_domain(split_block)
-channel = channel_estimate(freq_block, np.load("pilot_symbols.npy"), "zf")
-plot_channel(channel)
-eq_block = equalise(freq_block, channel)
-print(eq_block.shape)
-spectrum_plot(recording)
-simple_constellation_plot(eq_block)
-constellation_plot(eq_block)
+    split_block = ofdm_blocks(sync[0])
+    freq_block = freq_domain(split_block)
+
+    ## checking correctness of frequency domain block
+    print(freq_block.shape)
+    print(freq_block[0])  # print first block
+
+    channel = channel_estimate(freq_block, np.load("pilot_symbols.npy"), "zf")
+    plot_channel(channel)
+    eq_block = equalise(freq_block, channel)
+    print(eq_block.shape)
+    spectrum_plot(recording)
+    simple_constellation_plot(eq_block)
+    constellation_plot(eq_block)

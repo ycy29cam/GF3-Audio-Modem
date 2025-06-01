@@ -67,7 +67,7 @@ def prepare_tx_sequence() -> dict:
 
     blk_td      = to_real_ofdm_block(pilot)
     blk_td_cp   = add_cyclic_prefix(blk_td)  # CP only on first block 
-    
+
     sequence = np.concatenate([
         silence,
         chirp_up,
@@ -100,6 +100,8 @@ def play_audio(sig:np.ndarray, fs:int=FS):
     sd.play(sig, fs); sd.wait()
 
 output = prepare_tx_sequence()
-play_audio(output["waveform"])
 print(output["waveform"])
 print(output["info"])
+
+if __name__ == "__main__":
+    play_audio(output["waveform"])
