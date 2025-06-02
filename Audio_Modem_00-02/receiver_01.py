@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch 
 from scipy import signal, fft
 from scipy.io.wavfile import read
-from transmitter import generate_chirp, WAV_TX          #  <<< changed
+from transmitter_01 import generate_chirp, WAV_TX          #  <<< changed
 
 # ------------------------------------------------
 #   1.  General parameters (unchanged)
