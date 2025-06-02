@@ -22,7 +22,7 @@ CHAN_NPY        = 'channel_estimate.npy'
 
 CHIRP_ATTEN      = 0.80            # scale applied to both chirps
 TARGET_PEAK      = 0.80            # peak of every OFDM block after scaling
-LENGTH_TOL       = 512  
+LENGTH_TOL       = 10  
 
 Q_COL = { (0,0):'#d62728',  # red
           (0,1):'#1f77b4',  # blue
@@ -62,66 +62,137 @@ def to_real_ofdm_block(useful_freq_symbols, n=FFT_LEN):
 def add_cyclic_prefix(x:np.ndarray, cp_len:int=CP_LEN) -> np.ndarray:
     return np.concatenate([x[-cp_len:], x])
 
-def prepare_tx_sequence() -> dict:
+
+def prepare_tx_sequence(plot = False) -> dict:
     # ------------- build pieces -------------
     silence     = np.zeros(int(SILENCE_LEN_S * FS), np.float32)
     chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
-    chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
+    chirp_down  = add_cyclic_prefix(generate_chirp(F1, F0, CHIRP_LEN_S))
 
-    n_qpsk      = FFT_LEN//2 - 1
-    pilot_bits        = random_bitpairs(n_qpsk)
-    data_bits         = random_bitpairs(n_qpsk, seed_no=24)  # different seed for data
-    pilot, colour       = qpsk_gray(pilot_bits)            # also stores colour map
-    np.save(COLMAP_NPY, colour)                   # where pilot colours get saved go in
-    data, colour       = qpsk_gray(data_bits)            # also stores colour map
+
+    # ------------- build data blocks, returns data_blocks 2D array -------------
+    long_bits = random_bitpairs(n = (TX_REPS * (FFT_LEN + CP_LEN)), seed_no=24)
+    data_blocks = []
+    n_qpsk = FFT_LEN//2 - 1
+    for i in range(TX_REPS):
+        bits = long_bits[i * n_qpsk : (i + 1) * n_qpsk]
+        syms, _ = qpsk_gray(bits)
+        block = add_cyclic_prefix(to_real_ofdm_block(syms))
+        data_blocks.append(block)
+    np.save(DATA_NPY, data_blocks)
+
+    # ------------- build pilot blocks, returns pilot ------------
+    pilot_bits = random_bitpairs(n_qpsk)
+    freq_pilot, colour = qpsk_gray(pilot_bits)
+    pilot = to_real_ofdm_block(freq_pilot)            
+    np.save(COLMAP_NPY, colour)                   
+    np.save(PILOT_NPY, freq_pilot)
+
     
-    np.save(PILOT_NPY, pilot)
-    np.save(DATA_NPY, data)  # save data symbols for later use
+    # ------------- build sequence --> sequence is a 2D array with time signal blocks in it -------------
+    payload = []
+    for i in range(TX_REPS):
+        payload.append(pilot)
+        payload.append(data_blocks[i])
 
-    blk_td      = to_real_ofdm_block(pilot)
-    data_td   = to_real_ofdm_block(data)
-    blk_td_cp   = add_cyclic_prefix(blk_td)  # CP only on first block 
-    data_td_cp  = add_cyclic_prefix(data_td)  # CP only on first block
 
-    
-    # ------------- build sequence -------------
-    sequence = np.concatenate([
+    sequence = [
         silence,
         chirp_up,
-        np.tile(blk_td_cp, 2),         # 2 pilot blocks with CP
-        data_td_cp,                    # 1 data block with CP
-        np.tile(blk_td_cp, 2),         # 2 more pilot blocks with CP
-        add_cyclic_prefix(chirp_down)  # down-chirp with CP
-    ])
-    # plot of the waveform
+        *payload,  # interleave pilot and data blocks
+        chirp_down,
+        silence
+    ]
 
-    # plt = plt.figure(figsize=(10,3))
-    sf.write(WAV_TX, sequence, FS)
-    plt.figure(figsize=(10,3))
-    plt.plot(sequence, lw=.7)
-    plt.title("Transmit waveform (time domain)")
-    plt.xlabel("sample"); plt.ylabel("amplitude")
-    plt.tight_layout(); plt.show()
+    for i in range(2, len(sequence) - 1):
+        sequence[i] = add_cyclic_prefix(sequence[i])
+    
 
+    sf.write(WAV_TX, np.concatenate(sequence), FS)
+# ------------- plot function -------------
+    if plot:
+        plt.figure(figsize=(10, 3))
+        plt.plot(sequence, lw=0.7)
+        plt.title("Transmit waveform (time domain)")
+        plt.xlabel("sample")
+        plt.ylabel("amplitude")
+        plt.tight_layout()
+        plt.show()
+
+# ------------- flat dictionary ---> waveform is a flattened sequence, waveform_blocks is unflattened -------------
     info = {
         "leading_silence_samples": len(silence),
         "chirp_samples"          : len(chirp_up),
-        "ofdm_block_len"         : len(blk_td),
-        "ofdm_block_len_prefix"  : len(blk_td_cp),
+        "ofdm_block_len"         : FFT_LEN,
+        "ofdm_block_len_with_cp" : (len(sequence[5])),
         "cp_len"                 : CP_LEN,
-        "block_real?"            : np.isrealobj(blk_td),
-        "total_ofdm_length"      : len(sequence) - len(chirp_up) - len(add_cyclic_prefix(chirp_down)) - len(silence),
-        "final_len"              : len(sequence)
+        "block_real?"            : np.isrealobj(pilot),
+        "total_ofdm_length"      : len(np.concatenate(sequence)) - len(chirp_up) - len(add_cyclic_prefix(chirp_down)) - len(silence),
+        "final_len"              : len(np.concatenate(sequence)),
+        "no_of_payload_blocks"   : len(sequence) - 3,  # excluding silence and chirps
+        "waveform_blocks"        : sequence
     }
-    return dict(waveform=sequence, info=info)
+    return { "waveform": np.concatenate(sequence), **info}
+
+# def prepare_tx_sequence() -> dict:
+#     # ------------- build pieces -------------
+#     silence     = np.zeros(int(SILENCE_LEN_S * FS), np.float32)
+#     chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
+#     chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
+
+#     n_qpsk      = FFT_LEN//2 - 1
+#     pilot_bits        = random_bitpairs(n_qpsk)
+#     data_bits         = random_bitpairs(n_qpsk, seed_no=24)  # different seed for data
+#     pilot, colour       = qpsk_gray(pilot_bits)            # also stores colour map
+#     np.save(COLMAP_NPY, colour)                   # where pilot colours get saved go in
+#     data, colour       = qpsk_gray(data_bits)            # also stores colour map
+    
+#     np.save(PILOT_NPY, pilot)
+#     np.save(DATA_NPY, data)  # save data symbols for later use
+
+#     blk_td      = to_real_ofdm_block(pilot)
+#     data_td   = to_real_ofdm_block(data)
+#     blk_td_cp   = add_cyclic_prefix(blk_td)  # CP only on first block 
+#     data_td_cp  = add_cyclic_prefix(data_td)  # CP only on first block
+
+    
+#     # ------------- build sequence -------------
+#     sequence = np.concatenate([
+#         silence,
+#         chirp_up,
+#         np.tile(blk_td_cp, 2),         # 2 pilot blocks with CP
+#         data_td_cp,                    # 1 data block with CP
+#         np.tile(blk_td_cp, 2),         # 2 more pilot blocks with CP
+#         add_cyclic_prefix(chirp_down)  # down-chirp with CP
+#     ])
+#     # plot of the waveform
+
+#     # plt = plt.figure(figsize=(10,3))
+#     sf.write(WAV_TX, sequence, FS)
+#     plt.figure(figsize=(10,3))
+#     plt.plot(sequence, lw=.7)
+#     plt.title("Transmit waveform (time domain)")
+#     plt.xlabel("sample"); plt.ylabel("amplitude")
+#     plt.tight_layout(); plt.show()
+
+#     info = {
+#         "leading_silence_samples": len(silence),
+#         "chirp_samples"          : len(chirp_up),
+#         "ofdm_block_len"         : len(blk_td),
+#         "ofdm_block_len_prefix"  : len(blk_td_cp),
+#         "cp_len"                 : CP_LEN,
+#         "block_real?"            : np.isrealobj(blk_td),
+#         "total_ofdm_length"      : len(sequence) - len(chirp_up) - len(add_cyclic_prefix(chirp_down)) - len(silence),
+#         "final_len"              : len(sequence)
+#     }
+#     return dict(waveform=sequence, info=info)
 
 def play_audio(sig:np.ndarray, fs:int=FS):
     sd.play(sig, fs); sd.wait()
 
 output = prepare_tx_sequence()
-print(output["waveform"])
-print(output["info"])
 
 if __name__ == "__main__":
-    # play_audio(output["waveform"])
+
+    play_audio(output["waveform"])
     pass
