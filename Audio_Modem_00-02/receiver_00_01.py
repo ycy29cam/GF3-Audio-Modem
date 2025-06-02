@@ -250,7 +250,7 @@ def simple_constellation_plot(eq_fd:np.ndarray):
 
 if __name__ == "__main__":
 
-    record_audio(480000)
+    # record_audio(480000)
 
     SAMPLE_RATE, recording = read('rx_recording.wav')
     SAMPLE_RATE, transmission = read("tx_sequence.wav")

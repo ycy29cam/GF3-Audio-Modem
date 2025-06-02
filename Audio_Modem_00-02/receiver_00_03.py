@@ -71,7 +71,7 @@ def synchronise(rx:np.ndarray,
     end_payload   = peak_down - CP_LEN
     payload = rx[start_payload:end_payload]
     # exp = CP_LEN + TX_REPS*FFT_LEN # !make more robust, pull length from output dictionary 
-    exp = output['total_ofdm_length']
+    exp = output["info"]["total_ofdm_length"]
     if len(payload) < exp - LENGTH_TOL:
         raise RuntimeError(f"payload {len(payload)} << expected {exp}")
     elif len(payload) < exp:
@@ -119,7 +119,7 @@ def channel_estimate(rx_fd:np.ndarray, # !we have to implement this ourselves, n
         else:                                           #  zero-forcing
             H_hat = i / (pilot + eps)
         H_list.append(H_hat) # append each channel estimate to a list
-    H_list_pilot = H_list[0,1,3,4]
+    H_list_pilot = H_list[0:1]+H_list[3:4]
     H_hat_av = np.mean(H_list_pilot, axis=1)
     np.save(CHAN_NPY, H_hat_av)
     return H_hat
@@ -257,9 +257,9 @@ def constellation_plot(eq_fd: np.ndarray): # essentially takes in already equali
 
 def simple_constellation_plot(eq_fd:np.ndarray):
     col = np.load(COLMAP_NPY)
-    colours = np.tile(col, TX_REPS)
+    colours = np.tile(col,1)
     plt.figure(); plt.axhline(0,c='k'); plt.axvline(0,c='k')
-    plt.scatter(eq_fd.real, eq_fd.imag, c=colours,
+    plt.scatter(eq_fd[1].real, eq_fd[1].imag, c=colours,
                 s=10, alpha=.85, edgecolors='none')
     plt.title("Equalised constellation"); plt.xlabel("I"); plt.ylabel("Q")
     plt.gca().set_aspect('equal'); plt.tight_layout(); plt.show()
@@ -267,7 +267,7 @@ def simple_constellation_plot(eq_fd:np.ndarray):
 
 if __name__ == "__main__":
 
-    record_audio(480000)
+    # record_audio(480000)
 
     SAMPLE_RATE, recording = read('rx_recording.wav')
     SAMPLE_RATE, transmission = read("tx_sequence.wav")

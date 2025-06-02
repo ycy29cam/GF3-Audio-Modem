@@ -9,10 +9,10 @@ from scipy import signal, fft
 FS              = 48_000         # audio sample-rate (Hz)
 FFT_LEN         = 8192           # size of one OFDM symbol (must be even)
 CP_LEN          = FFT_LEN // 4   # cyclic-prefix length
-CHIRP_LEN_S     = 2              # chirp duration (seconds)
+CHIRP_LEN_S     = 0.5              # chirp duration (seconds)
 SILENCE_LEN_S   = 1.0  
-F0, F1          = 20, 15000      # chirp start / end frequencies (Hz)
-TX_REPS         = 8              # 1 pilot + 7 identical data blocks
+F0, F1          = 20, 10000      # chirp start / end frequencies (Hz)
+TX_REPS         = 8              # 1 pilot + 7 identical data blocks 
 WAV_TX          = 'tx_sequence.wav'
 WAV_RX          = 'rx_recording.wav'
 PILOT_NPY       = 'pilot_symbols.npy'
@@ -41,7 +41,6 @@ def qpsk_gray(bitpairs):
     mapping = {(0,0):1+1j, (0,1):1-1j, (1,1):-1-1j, (1,0):-1+1j}
     syms    = np.array([mapping[tuple(b)] for b in bitpairs], np.complex64)
     colours = np.array([Q_COL[tuple(b)]  for b in bitpairs])
-    np.save(COLMAP_NPY, colours)
     return syms, colours      # return colours to replicate later
 
 def to_real_ofdm_block(freq_syms, n=FFT_LEN):
@@ -64,9 +63,10 @@ def prepare_tx_sequence() -> dict:
     chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
 
     n_qpsk      = FFT_LEN//2 - 1
-    pilot_bits        = random_bitpairs(n_qpsk)            # where data symbols go in
+    pilot_bits        = random_bitpairs(n_qpsk)
     data_bits         = random_bitpairs(n_qpsk, seed_no=24)  # different seed for data
     pilot, colour       = qpsk_gray(pilot_bits)            # also stores colour map
+    np.save(COLMAP_NPY, colour)                   # where pilot colours get saved go in
     data, colour       = qpsk_gray(data_bits)            # also stores colour map
     
     np.save(PILOT_NPY, pilot)
@@ -117,4 +117,5 @@ print(output["waveform"])
 print(output["info"])
 
 if __name__ == "__main__":
-    play_audio(output["waveform"])
+    # play_audio(output["waveform"])
+    pass
