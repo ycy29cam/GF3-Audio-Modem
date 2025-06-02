@@ -6,9 +6,17 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch 
 from scipy import signal, fft
 from scipy.io.wavfile import read
-from transmitter import generate_chirp, WAV_TX          #  <<< changed
-import transmitter as tx 
-from transmitter import output
+from transmitter_00_02 import generate_chirp, WAV_TX, output        #  <<< changed
+import transmitter_00_02 as tx 
+
+# ------------------------------------------------
+#   !!! READ ME !!!
+#   
+#   Implemented channel estimation for the specific case, where five blocks are transmitted
+#   | pilot | pilot | data | pilot | pilot |
+#   Average of the pilots is taken for channel estimation
+# ------------------------------------------------
+
 # ------------------------------------------------
 #   1.  General parameters (unchanged)
 # ------------------------------------------------
@@ -60,10 +68,10 @@ def synchronise(rx:np.ndarray,
     peak_down = peak_down[peak_down > search_from][0]
 
     start_payload = peak_up + len(chirp_up)
-    end_payload   = peak_down
+    end_payload   = peak_down - CP_LEN
     payload = rx[start_payload:end_payload]
     # exp = CP_LEN + TX_REPS*FFT_LEN # !make more robust, pull length from output dictionary 
-    exp = output["total_ofdm_length"]
+    exp = output['total_ofdm_length']
     if len(payload) < exp - LENGTH_TOL:
         raise RuntimeError(f"payload {len(payload)} << expected {exp}")
     elif len(payload) < exp:
@@ -75,10 +83,17 @@ def synchronise(rx:np.ndarray,
 # ------------------------------------------------
 #   4.  OFDM helpers  (unchanged)
 # ------------------------------------------------
+# def ofdm_blocks(payload):
+#     blocks, idx = [], CP_LEN # idx = index 
+#     for _ in range(TX_REPS):
+#         blocks.append(payload[idx:idx+FFT_LEN]); idx += FFT_LEN # !make a more robust function that can handle blocks with cyclic prefixes throughout
+#     return np.array(blocks)
+
 def ofdm_blocks(payload):
-    blocks, idx = [], CP_LEN # idx = index 
-    for _ in range(TX_REPS):
-        blocks.append(payload[idx:idx+FFT_LEN]); idx += FFT_LEN # !make a more robust function that can handle blocks with cyclic prefixes throughout
+    blocks, idx = [], 0  # idx = index
+    for _ in range(5):
+        blocks.append(payload[idx:idx+FFT_LEN+CP_LEN]); idx += FFT_LEN + CP_LEN  # !make a more robust function that can handle blocks with cyclic prefixes throughout
+        blocks[-1] = blocks[-1][CP_LEN:]  # remove cyclic prefix
     return np.array(blocks)
 
 def freq_domain(blocks_td:np.ndarray) -> np.ndarray:
@@ -91,9 +106,9 @@ def channel_estimate(rx_fd:np.ndarray, # !we have to implement this ourselves, n
                      pilot:np.ndarray, # ! check RX is 1 OFDM block, otherwise formula for channhel estimation returns far too long channel estimate
                      method:str='zf',               #  <<< changed
                      noise_var:float=1e-4) -> np.ndarray:
-    """
-    method : 'zf' (default) or 'mmse'
-    """
+
+    #   Different estimation function
+    #   Method : 'zf' (default) or 'mmse'
     eps = 1e-12
     H_list = []  # list to store channel estimates for each block
     for i in rx_fd:
@@ -104,9 +119,11 @@ def channel_estimate(rx_fd:np.ndarray, # !we have to implement this ourselves, n
         else:                                           #  zero-forcing
             H_hat = i / (pilot + eps)
         H_list.append(H_hat) # append each channel estimate to a list
-    H_hat_av = np.mean(H_list, axis=1)
+    H_list_pilot = H_list[0,1,3,4]
+    H_hat_av = np.mean(H_list_pilot, axis=1)
     np.save(CHAN_NPY, H_hat_av)
     return H_hat
+
 
 
 def equalise(rx_fd:np.ndarray, H:np.ndarray) -> np.ndarray:
@@ -207,7 +224,7 @@ def constellation_plot(eq_fd: np.ndarray): # essentially takes in already equali
     # ------------------------------------------------------------
     # Use the transmitter’s colour dictionary if available
     try:
-        from transmitter import Q_COL
+        from transmitter_00_02 import Q_COL
         colour_map = {v:k for k,v in Q_COL.items()}  # colour→bits
         label_map  = {'00':'1+1j','01':'1-1j','11':'-1-1j','10':'-1+1j'}
         legend_elems = []

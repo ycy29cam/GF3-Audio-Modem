@@ -6,9 +6,8 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch 
 from scipy import signal, fft
 from scipy.io.wavfile import read
-from transmitter import generate_chirp, WAV_TX          #  <<< changed
-import transmitter as tx 
-from transmitter import output
+from transmitter_00_02 import generate_chirp, WAV_TX, output        #  <<< changed
+import transmitter_00_02 as tx 
 # ------------------------------------------------
 #   1.  General parameters (unchanged)
 # ------------------------------------------------
@@ -214,7 +213,7 @@ def constellation_plot(eq_fd: np.ndarray): # essentially takes in already equali
     # ------------------------------------------------------------
     # Use the transmitter’s colour dictionary if available
     try:
-        from transmitter import Q_COL
+        from transmitter_00_02 import Q_COL
         colour_map = {v:k for k,v in Q_COL.items()}  # colour→bits
         label_map  = {'00':'1+1j','01':'1-1j','11':'-1-1j','10':'-1+1j'}
         legend_elems = []

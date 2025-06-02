@@ -6,17 +6,8 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch 
 from scipy import signal, fft
 from scipy.io.wavfile import read
-from transmitter import generate_chirp, WAV_TX          #  <<< changed
-import transmitter as tx 
-from transmitter import output
-
-# ------------------------------------------------
-#   !!! READ ME !!!
-#   
-#   Implemented channel estimation for the specific case, where five blocks are transmitted
-#   | pilot | pilot | data | pilot | pilot |
-#   Average of the pilots is taken for channel estimation
-# ------------------------------------------------
+from transmitter_00_01 import generate_chirp, WAV_TX, output        #  <<< changed
+import transmitter_00_01 as tx 
 
 # ------------------------------------------------
 #   1.  General parameters (unchanged)
@@ -69,7 +60,7 @@ def synchronise(rx:np.ndarray,
     peak_down = peak_down[peak_down > search_from][0]
 
     start_payload = peak_up + len(chirp_up)
-    end_payload   = peak_down - CP_LEN
+    end_payload   = peak_down
     payload = rx[start_payload:end_payload]
     # exp = CP_LEN + TX_REPS*FFT_LEN # !make more robust, pull length from output dictionary 
     exp = output["total_ofdm_length"]
@@ -84,17 +75,10 @@ def synchronise(rx:np.ndarray,
 # ------------------------------------------------
 #   4.  OFDM helpers  (unchanged)
 # ------------------------------------------------
-# def ofdm_blocks(payload):
-#     blocks, idx = [], CP_LEN # idx = index 
-#     for _ in range(TX_REPS):
-#         blocks.append(payload[idx:idx+FFT_LEN]); idx += FFT_LEN # !make a more robust function that can handle blocks with cyclic prefixes throughout
-#     return np.array(blocks)
-
 def ofdm_blocks(payload):
-    blocks, idx = [], 0  # idx = index
-    for _ in range(5):
-        blocks.append(payload[idx:idx+FFT_LEN+CP_LEN]); idx += FFT_LEN + CP_LEN  # !make a more robust function that can handle blocks with cyclic prefixes throughout
-        blocks[-1] = blocks[-1][CP_LEN:]  # remove cyclic prefix
+    blocks, idx = [], CP_LEN # idx = index 
+    for _ in range(TX_REPS):
+        blocks.append(payload[idx:idx+FFT_LEN]); idx += FFT_LEN # !make a more robust function that can handle blocks with cyclic prefixes throughout
     return np.array(blocks)
 
 def freq_domain(blocks_td:np.ndarray) -> np.ndarray:
@@ -108,8 +92,8 @@ def channel_estimate(rx_fd:np.ndarray, # !we have to implement this ourselves, n
                      method:str='zf',               #  <<< changed
                      noise_var:float=1e-4) -> np.ndarray:
     """
-    #   Different estimation function
-    #   Method : 'zf' (default) or 'mmse'
+    method : 'zf' (default) or 'mmse'
+    """
     eps = 1e-12
     H_list = []  # list to store channel estimates for each block
     for i in rx_fd:
@@ -122,23 +106,6 @@ def channel_estimate(rx_fd:np.ndarray, # !we have to implement this ourselves, n
         H_list.append(H_hat) # append each channel estimate to a list
     H_hat_av = np.mean(H_list, axis=1)
     np.save(CHAN_NPY, H_hat_av)
-    return H_hat
-    """
-    eps = 1e-12
-    pilot_positions = [0, 1, 3, 4]
-
-    Y_avg = np.mean(np.array([rx_fd[i] for i in pilot_positions]), axis=0)
-    
-    if method.lower() == 'mmse':
-        H_zf  = Y_avg / (pilot + eps)
-        Rhh   = np.mean(np.abs(H_zf)**2)
-        H_hat = (Rhh / (Rhh + noise_var)) * H_zf
-    elif method.lower() == 'tikhonov':
-        # Tikhonov regularisation directly from pilot
-        H_hat = (np.conj(pilot) * Y_avg) / (np.abs(pilot)**2 + noise_var + eps)
-    else:  # zero-forcing
-        H_hat = Y_avg / (pilot + eps)
-    np.save(CHAN_NPY, H_hat)
     return H_hat
 
 
@@ -240,7 +207,7 @@ def constellation_plot(eq_fd: np.ndarray): # essentially takes in already equali
     # ------------------------------------------------------------
     # Use the transmitter’s colour dictionary if available
     try:
-        from transmitter import Q_COL
+        from transmitter_00_01 import Q_COL
         colour_map = {v:k for k,v in Q_COL.items()}  # colour→bits
         label_map  = {'00':'1+1j','01':'1-1j','11':'-1-1j','10':'-1+1j'}
         legend_elems = []
