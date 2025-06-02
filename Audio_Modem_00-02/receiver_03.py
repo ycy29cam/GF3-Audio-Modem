@@ -8,6 +8,14 @@ from scipy import signal, fft
 from scipy.io.wavfile import read
 from transmitter import generate_chirp, WAV_TX          #  <<< changed
 
+"""
+Improvements:
+- Channel estimation: single or multiple blocks used
+- Constellation plotting, with colours, means and legend
+- Per quadrant error calculation
+- CPE removal
+"""
+
 # ------------------------------------------------
 #   1.  General parameters (unchanged)
 # ------------------------------------------------
@@ -126,6 +134,124 @@ def channel_estimate(rx_fd, pilot, method='zf', noise_var=1e-4):
         H_hat = Y / (pilot + eps)
     np.save(CHAN_NPY, H_hat)
     return H_hat
+
+def adaptive_channel_equalise(rx_fd: np.ndarray,
+                              pilot: np.ndarray,
+                              method: str = 'tikhonov',
+                              noise_var: float = 1e-4,
+                              n_mean: int = 1,
+                              do_decision_directed: bool = True):
+    """
+    Perform per-block channel estimation, optionally using decision-directed 
+    pilot refresh on blocks ≥ n_mean.
+
+    Inputs:
+      rx_fd       : shape = (TX_REPS, Ntones), the FFT output of each OFDM block.
+                    TX_REPS is typically 4; Ntones = FFT_LEN/2 - 1 (e.g. 4095).
+      pilot       : length Ntones, the known complex pilot used on block 0.
+      method      : one of 'zf', 'mmse', or 'tikhonov'.
+      noise_var   : noise‐variance for MMSE/Tikhonov.
+      n_mean      : integer ∈ [1 .. TX_REPS], how many blocks to average
+                    for the *initial* channel estimate. Default=1 uses only rx_fd[0].
+      do_decision_directed : if True, for k ≥ n_mean use decoded symbols as 
+                    pseudo-pilot to refresh Ĥ_k.
+
+    Returns:
+      eq_fd_flat    : length = TX_REPS * Ntones, the concatenated equalised symbols.
+      H_all         : shape = (TX_REPS, Ntones), the channel estimate for each block.
+      decoded_bits  : shape = (TX_REPS, Ntones, 2), the final (b0,b1) decision-bits.
+    """
+    TX_REPS, Ntones = rx_fd.shape
+
+    # 1) Sanity‐check n_mean
+    if not (1 <= n_mean <= TX_REPS):
+        raise ValueError(f"n_mean must be between 1 and {TX_REPS}, got {n_mean}")
+
+    # 2) Ensure pilot is flat 1-D complex of length Ntones
+    pilot = np.asarray(pilot, dtype=np.complex64).ravel()
+    if pilot.size != Ntones:
+        raise ValueError(f"pilot length {pilot.size} ≠ Ntones {Ntones}")
+
+    # 3) Compute initial averaged Y over first n_mean blocks
+    Y_avg = np.mean(rx_fd[:n_mean, :], axis=0)   # shape = (Ntones,)
+
+    eps = 1e-12
+    method = method.lower()
+
+    # 4) Helper to estimate H from arbitrary (Yvec, Pvec) with chosen method
+    def _estimate_from_pairs(Yvec: np.ndarray, Pvec: np.ndarray) -> np.ndarray:
+        """
+        Given Yvec (received subcarriers) and Pvec (pilot symbols, real or
+        decision-directed), return Ĥ according to 'zf','mmse','tikhonov'.
+        """
+        # Convert to complex64 1-D
+        Yv = np.asarray(Yvec, dtype=np.complex64).ravel()
+        Pv = np.asarray(Pvec, dtype=np.complex64).ravel()
+        if Yv.size != Ntones or Pv.size != Ntones:
+            raise ValueError("Yvec and Pvec must both have length Ntones")
+
+        if method == 'zf':
+            return Yv / (Pv + eps)
+
+        elif method == 'mmse':
+            H_zf = Yv / (Pv + eps)
+            Rhh  = np.mean(np.abs(H_zf)**2)
+            return (Rhh / (Rhh + noise_var)) * H_zf
+
+        elif method == 'tikhonov':
+            # Tikhonov: conj(Pv)*Yv / (|Pv|^2 + noise_var)
+            denom = np.abs(Pv)**2 + noise_var + eps
+            return (np.conj(Pv) * Yv) / denom
+
+        else:
+            raise ValueError(f"Unknown method '{method}': choose 'zf','mmse','tikhonov'")
+
+    # 5) Build arrays to hold results
+    H_all        = np.zeros((TX_REPS, Ntones), dtype=np.complex64)
+    eq_blocks    = []  # list of length TX_REPS, each entry shape=(Ntones,)
+    decoded_bits = np.zeros((TX_REPS, Ntones, 2), dtype=int)
+
+    # 6) Estimate H_avg from Y_avg and true pilot
+    H_avg = _estimate_from_pairs(Y_avg, pilot)
+    # Assign H_avg to blocks 0..(n_mean-1)
+    for k in range(n_mean):
+        H_all[k,:] = H_avg
+
+    # 7) Equalise & decode blocks 0..(n_mean-1)
+    for k in range(n_mean):
+        sym_k = rx_fd[k]
+        eq_k  = sym_k / H_avg
+        eq_blocks.append(eq_k)
+
+        # Decode bits for possible later decision-directed use
+        decoded_bits[k, :, 0] = (eq_k.real > 0).astype(int)
+        decoded_bits[k, :, 1] = (eq_k.imag > 0).astype(int)
+
+    # 8) For blocks k = n_mean..TX_REPS-1, do decision-directed refresh
+    for k in range(n_mean, TX_REPS):
+        # (a) Build pseudo-pilot P_dec from decoded bits of block (k-1)
+        b0 = decoded_bits[k-1, :, 0]         # shape=(Ntones,)
+        b1 = decoded_bits[k-1, :, 1]
+        P_dec = (2*b0 - 1) + 1j * (2*b1 - 1)  # 1-D complex, ±1±j
+
+        # (b) Estimate H_k from (Y_k = rx_fd[k], P_dec)
+        Yk    = rx_fd[k]
+        Hk    = _estimate_from_pairs(Yk, P_dec)
+        H_all[k, :] = Hk
+
+        # (c) Equalise block k
+        eq_k = Yk / Hk
+        eq_blocks.append(eq_k)
+
+        # (d) Decode bits for block k
+        decoded_bits[k, :, 0] = (eq_k.real > 0).astype(int)
+        decoded_bits[k, :, 1] = (eq_k.imag > 0).astype(int)
+
+    # 9) Concatenate all equalised blocks into a flat vector
+    eq_fd_flat = np.concatenate(eq_blocks)  # length = TX_REPS * Ntones
+
+    return eq_fd_flat, H_all, decoded_bits
+
 
 def equalise(rx_fd:np.ndarray, H:np.ndarray) -> np.ndarray:
     return rx_fd / H
@@ -321,10 +447,16 @@ def symbol_error_rate(eq_fd: np.ndarray):
 
 SAMPLE_RATE, recording = read('rx_recording.wav')
 SAMPLE_RATE, transmission = read("tx_sequence.wav")
+pilot = np.load(PILOT_NPY)
 
 chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
 chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
 
+# ------------------------------------------------------------
+# 1.  First Pass (to estimate Delta f)
+# ------------------------------------------------------------
+
+print("---------- First Pass ----------")
 print("Length of recording: ", len(recording))
 sync = synchronise(recording, chirp_up, chirp_down)
 print("Payload: ", sync[0], "Cut-off point 1: ", sync[1], "Cut-off point 2: ", sync[2])
@@ -337,13 +469,39 @@ print("Frequency block shape: ", freq_block.shape)
 
 freq_block_corr, phis = remove_cpe(freq_block)
 df_est = refine_cfo(phis)
-print(f"$\Delta f$ estimate: ", df_est)
+print("Delta f estimate: ", df_est)
 
-channel = channel_estimate(np.asarray(freq_block_corr), np.load("pilot_symbols.npy"), "mmse")
+# ------------------------------------------------------------
+# 2.  Second Pass (to remove CPE)
+# ------------------------------------------------------------
+
+n = np.arange(len(recording))
+derotator = np.exp(-1j * 2* np.pi * df_est * n / FS)
+dr_recording = np.asarray(recording * derotator).real
+
+print("---------- Second Pass ----------")
+print("Length of recording: ", len(recording))
+re_sync = synchronise(dr_recording, chirp_up, chirp_down)
+print("Payload: ", re_sync[0], "Cut-off point 1: ", re_sync[1], "Cut-off point 2: ", re_sync[2])
+
+compare_tx_rx(dr_recording, re_sync[1], re_sync[2])
+
+re_split_block = ofdm_blocks(re_sync[0])
+re_freq_block = freq_domain(re_split_block)
+print("Frequency block shape: ", re_freq_block.shape)
+
+re_freq_block_corr, re_phis = remove_cpe(re_freq_block)
+re_df_est = refine_cfo(re_phis)
+print("Delta f estimate: ", re_df_est)
+
+# ------------------------------------------------------------
+# 3.  Kept the same
+# ------------------------------------------------------------
+
+eq_block, channel, decoded_bits = adaptive_channel_equalise(re_freq_block_corr, pilot, method="tikhonov", noise_var=1e-4, n_mean=1, do_decision_directed=True)
 plot_channel(channel)
-eq_block = equalise(np.asarray(freq_block_corr), channel)
 print("Shape of equalised OFDM blocks: ", eq_block.shape)
-spectrum_plot(recording)
+spectrum_plot(dr_recording)
 simple_constellation_plot(np.asarray(eq_block))
 constellation_plot(np.asarray(eq_block))
-symbol_error_rate(eq_block)
+symbol_error_rate(eq_block) 
