@@ -35,7 +35,7 @@ def generate_chirp(f0, f1, dur, fs=FS):
 def random_bitpairs(n):
     np.random.seed(42)  # for reproducibility
     return np.random.randint(0, 2, size=(n,2), dtype=np.int8) #worth adding a seed for reproducibility
-
+ 
 def qpsk_gray(bitpairs):
     mapping = {(0,0):1+1j, (0,1):1-1j, (1,1):-1-1j, (1,0):-1+1j}
     syms    = np.array([mapping[tuple(b)] for b in bitpairs], np.complex64)

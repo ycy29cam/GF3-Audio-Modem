@@ -8,6 +8,7 @@ from scipy import signal, fft
 from scipy.io.wavfile import read
 from transmitter import generate_chirp, WAV_TX          #  <<< changed
 import transmitter as tx 
+from transmitter import output
 # ------------------------------------------------
 #   1.  General parameters (unchanged)
 # ------------------------------------------------
@@ -61,13 +62,14 @@ def synchronise(rx:np.ndarray,
     start_payload = peak_up + len(chirp_up)
     end_payload   = peak_down
     payload = rx[start_payload:end_payload]
-    exp = CP_LEN + TX_REPS*FFT_LEN # !make more robust, pull length from output dictionary 
-    if len(payload) > exp + LENGTH_TOL: # !missing a statement for len(payload)< exp + LENGTH_TOL & len(payload) > exp
-        payload = payload[:exp]
-    elif len(payload) < exp - LENGTH_TOL:
+    # exp = CP_LEN + TX_REPS*FFT_LEN # !make more robust, pull length from output dictionary 
+    exp = output["total_ofdm_length"]
+    if len(payload) < exp - LENGTH_TOL:
         raise RuntimeError(f"payload {len(payload)} << expected {exp}")
     elif len(payload) < exp:
         payload = np.pad(payload, (0, exp-len(payload)))
+    else:
+        payload = payload[:exp]
     return payload, start_payload, end_payload   #  unchanged return
 
 # ------------------------------------------------
