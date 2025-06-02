@@ -33,9 +33,13 @@ def generate_chirp(f0, f1, dur, fs=FS):
     t = np.arange(int(dur*fs))/fs
     return (CHIRP_ATTEN*signal.chirp(t, f0, t[-1], f1)).astype(np.float32)
 
-def random_bitpairs(n, seed_no=42):
-    np.random.seed(seed_no)  # for reproducibility
-    return np.random.randint(0, 2, size=(n,2), dtype=np.int8) #worth adding a seed for reproducibility
+def random_bitpairs(n, seed_no=42): 
+    """ generates a choppable random sequence of bit pairs
+        Aruments:
+        n (int): number of bit pairs to generate, if not specified, defaults to maximum length of block emission
+        seed_no (int): random seed for reproducibility"""
+    np.random.seed(seed_no)  
+    return np.random.randint(0, 2, size=(n,2), dtype=np.int8) 
  
 def qpsk_gray(bitpairs):
     mapping = {(0,0):1+1j, (0,1):1-1j, (1,1):-1-1j, (1,0):-1+1j}
@@ -43,11 +47,13 @@ def qpsk_gray(bitpairs):
     colours = np.array([Q_COL[tuple(b)]  for b in bitpairs])
     return syms, colours      # return colours to replicate later
 
-def to_real_ofdm_block(freq_syms, n=FFT_LEN):
+def to_real_ofdm_block(useful_freq_symbols, n=FFT_LEN):
+    """ converts a sequence of useful frequency symbols to a real OFDM block
+    """
     half = n//2
     X = np.zeros(n, np.complex64)
-    X[1:half]   = freq_syms
-    X[half+1:]  = np.conj(freq_syms[::-1])
+    X[1:half]   = useful_freq_symbols
+    X[half+1:]  = np.conj(useful_freq_symbols[::-1])
     x = fft.ifft(X).real.astype(np.float32)
     # peak normalisation
     x *= TARGET_PEAK/np.max(np.abs(x))
