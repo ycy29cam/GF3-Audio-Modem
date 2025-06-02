@@ -8,13 +8,17 @@ from scipy import signal, fft
 from scipy.io.wavfile import read
 from transmitter import generate_chirp, WAV_TX          #  <<< changed
 
-"""
-Improvements:
-- Channel estimation: single or multiple blocks used
-- Constellation plotting, with colours, means and legend
-- Per quadrant error calculation
-- CPE removal
-"""
+# ------------------------------------------------
+#   !!! READ ME !!!
+#   
+#   Implemented channel estimation for the specific case, where five blocks are transmitted
+#   | prefix - pilot | pilot | prefix - data | prefix - pilot | pilot |
+#   Average of the pilots is taken for channel estimation
+#
+#   Things to work on:
+#   - Average the channel response and not the input frequency blocks
+#   - The transmitted sequence used by Max should have prefix in front of every block, except for the first up chirp
+# ------------------------------------------------
 
 # ------------------------------------------------
 #   1.  General parameters (unchanged)
@@ -122,6 +126,10 @@ def refine_cfo(phis):
 # ------------------------------------------------
 def channel_estimate(rx_fd, pilot, method='zf', noise_var=1e-4):
     eps = 1e-12
+
+    #   PROBLEM: Average over H, not average over Y
+    #   Resolved? ()
+
     Y   = rx_fd[0]
     if method.lower() == 'mmse':
         H_zf  = Y / (pilot + eps)
