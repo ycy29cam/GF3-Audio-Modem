@@ -6,8 +6,8 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch 
 from scipy import signal, fft
 from scipy.io.wavfile import read
-from transmitter_00_02 import generate_chirp, WAV_TX, output, Q_COL        
-import transmitter_00_02 as tx 
+from transmitter_00_03 import generate_chirp, WAV_TX, output, Q_COL        
+import transmitter_00_03 as tx 
 # look into using GPU for hardware acceleration of convolution, e.g. using CuPy for faster processing
 
 # ------------------------------------------------
@@ -53,14 +53,16 @@ def start_end_synchronise(rx:np.ndarray,
                 chirp_up:np.ndarray,
                 chirp_down:np.ndarray) -> tuple[np.ndarray,int,int]: # colon tells you what type the function takes, and arrow tells you what the function returns
     corr_up   = signal.correlate(rx, chirp_up,   mode='valid')
+    plt.plot(corr_up, label='up-chirp correlation')
     peak_up   = np.argmax(corr_up) 
     corr_down = signal.correlate(rx, chirp_down, mode='valid')
+    plt.plot(corr_down, label='down-chirp correlation')
     search_from = peak_up + len(chirp_up) # search for down-chirp after up-chirp
     peak_down = np.where(corr_down > 0.8*corr_down.max())[0] #formatting, 2D - 1D but no information loss
     peak_down = peak_down[peak_down > search_from][0]
 
     start_payload = peak_up + len(chirp_up)
-    end_payload   = peak_down - CP_LEN
+    end_payload   = peak_down 
     print("start_payload:", start_payload, "end_payload:", end_payload)
     payload = rx[start_payload:end_payload]
     exp = output["total_ofdm_length"]
@@ -188,15 +190,15 @@ def channel_estimation(blocks: np.ndarray,
 def reconstruct_data_blocks(useful_frequency_blocks, H_est_array):
     payload_type_list = output["payload_type_list"]  # list of 'pilot' and 'data' for each block
     assert len(useful_frequency_blocks) == len(payload_type_list), "Mismatch between blocks and payload types"
-    assert len(H_est_array) == payload_type_list.count("data"), "Mismatch between channel estimates and payload types"
-    data_blocks = [useful_frequency_blocks[idx] for idx, btype in enumerate(payload_type_list) if btype == 'data']
-    data_blocks = np.array(data_blocks) 
-    decoded_datablocks = H_est_array // data_blocks  # element-wise division
+    assert len(H_est_array) == len(payload_type_list), "Mismatch between channel estimates and payload types"
+    data_blocks = np.array([useful_frequency_blocks[idx] for idx, btype in enumerate(payload_type_list) if btype == 'data'])
+    data_H_est_array = np.array([H_est_array[idx] for idx, btype in enumerate(payload_type_list) if btype == 'data'])
+    decoded_datablocks = data_blocks/data_H_est_array  # element-wise division
     return decoded_datablocks
 
 def equalise(rx_fd, H):
     return rx_fd / H
-
+ 
 
 
 # ------------------------------------------------
@@ -213,30 +215,50 @@ def plot_channel(H:np.ndarray):
     ax[1].set_xlabel("sub-carrier")
     plt.tight_layout(); plt.show()
 
-def compare_tx_rx(rx:np.ndarray, start:int, end:int, tx_path:str=WAV_TX):
+def compare_tx_rx(rx:np.ndarray, start_rx_payload:int, end_rx_payload_boundary:int, tx_path:str=WAV_TX):
     """
-    Trim off leading silence from TX, align lengths exactly to chirp-OFDM-chirp
-    span, normalise both segments by their own peaks, then overlay.
+    Compares the extracted RX payload against the corresponding TX payload.
+    start_rx_payload: Index in rx where the payload begins (after up-chirp).
+    end_rx_payload_boundary: Index in rx where the down-chirp begins (payload ends before this).
     """
-    tx_sig  = load_wav(tx_path)
+    tx_sig   = load_wav(tx_path)
 
+    tx_leading_silence = output["leading_silence_samples"]
+    tx_chirp_len = output["chirp_samples"] # Length of the core chirp signal
+    tx_start_of_payload = tx_leading_silence + tx_chirp_len
+    payload_length_to_compare = output["total_ofdm_length"] # This is 'exp'
 
-    tx_start = int(SILENCE_LEN_S * FS)              # first chirp sample
-    seg_len  = end - start                          # length of interest
-    tx_seg   = tx_sig[tx_start : tx_start + seg_len]
-    rx_seg   = rx[start       : start + seg_len]    # trimmed RX
+    # Define segments for comparison (both should be the OFDM payload part)
+    tx_seg_end = tx_start_of_payload + payload_length_to_compare
+    rx_seg_end = start_rx_payload + payload_length_to_compare
 
-    m = max(np.max(np.max(np.abs(rx))), 1e-3) 
-    n = max(np.max(np.max(np.abs(tx_sig))), 1e-3) 
-    tx_seg, rx_seg = tx_seg/n, rx_seg/m #-#-# normalised amplitudes by respective max values  
+    # Boundary checks
+    if tx_start_of_payload >= tx_seg_end or tx_seg_end > len(tx_sig):
+        print("Warning: TX segment for comparison is invalid or out of bounds.")
+        return
+    if start_rx_payload >= rx_seg_end or rx_seg_end > len(rx):
+        print("Warning: RX segment for comparison is invalid or out of bounds.")
+        return
+
+    tx_payload_seg = tx_sig[tx_start_of_payload : tx_seg_end]
+    rx_payload_seg = rx[start_rx_payload : rx_seg_end]
+    
+    # Normalize for plotting
+    m_peak = np.max(np.abs(rx_payload_seg)) if rx_payload_seg.size > 0 else 0
+    n_peak = np.max(np.abs(tx_payload_seg)) if tx_payload_seg.size > 0 else 0
+    
+
+    
+    tx_norm = tx_payload_seg / n_peak
+    rx_norm = rx_payload_seg / m_peak
 
     plt.figure(figsize=(10,3))
-    plt.plot(tx_seg, label='TX (norm.)', lw=.8)
-    plt.plot(rx_seg, label='RX (norm.)', lw=.6, alpha=.7)
-    plt.title("TX vs RX waveform (aligned, silence removed)")
-    plt.xlabel("sample"); plt.ylabel("normalised amplitude")
+    plt.plot(tx_norm, label='TX Payload (norm.)', lw=.8)
+    plt.plot(rx_norm, label='RX Payload (norm.)', lw=.6, alpha=.7)
+    plt.title("TX vs RX OFDM Payload (aligned)")
+    plt.xlabel("sample in payload")
+    plt.ylabel("normalised amplitude")
     plt.legend(); plt.tight_layout(); plt.show()
-
 # ------------------------------------------------
 #   7.  Spectrum & constellation 
 # ------------------------------------------------
@@ -468,14 +490,13 @@ if __name__ == "__main__":
 
     #------------------run reciever--------------------------------
     payload, start_payload, end_payload = start_end_synchronise(recording, chirp_up, chirp_down)
-    # compare_tx_rx(recording, start_payload, end_payload)
     time_blocks = time_OFDM_chopper(payload)
     useful_freq_blocks  = freq_domain(time_blocks)
     h_estimated_array = channel_estimation(useful_freq_blocks, np.load(PILOT_NPY), "zf")
     reconstructed_data = reconstruct_data_blocks(useful_freq_blocks, h_estimated_array)
     #when we eventually work with unknown data blocks, we would then need to do maximum likelihood estimation to find the most likely data blocks from the reconstructed data blocks
     #for now we will just plot the equalised blocks and see how they look qualitatively
-    plot_equalised_blocks(reconstructed_data, output["payload_data_blocks"])
+    plot_equalised_blocks(reconstructed_data[0], output["payload_data_blocks"][0])
 
 
     

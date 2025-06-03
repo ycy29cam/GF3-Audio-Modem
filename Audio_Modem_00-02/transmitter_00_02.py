@@ -12,7 +12,7 @@ CP_LEN          = FFT_LEN // 4   # cyclic-prefix length
 CHIRP_LEN_S     = 0.5              # chirp duration (seconds)
 SILENCE_LEN_S   = 1.0  
 F0, F1          = 20, 10000      # chirp start / end frequencies (Hz)
-TX_REPS         = 10              # 1 pilot + 7 identical data blocks 
+TX_REPS         = 5              # 1 pilot + 7 identical data blocks 
 WAV_TX          = 'tx_sequence.wav'
 WAV_RX          = 'rx_recording.wav'
 PILOT_NPY       = 'pilot_symbols.npy'
@@ -67,7 +67,7 @@ def prepare_tx_sequence(plot = False) -> dict:
     # ------------- build pieces -------------
     silence     = np.zeros(int(SILENCE_LEN_S * FS), np.float32)
     chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
-    chirp_down  = add_cyclic_prefix(generate_chirp(F1, F0, CHIRP_LEN_S))
+    chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
 
 
     # ------------- build data blocks, returns data_blocks 2D array -------------
@@ -77,7 +77,7 @@ def prepare_tx_sequence(plot = False) -> dict:
     for i in range(TX_REPS):
         bits = long_bits[i * n_qpsk : (i + 1) * n_qpsk]
         syms, _ = qpsk_gray(bits)
-        block = add_cyclic_prefix(to_real_ofdm_block(syms))
+        block = to_real_ofdm_block(syms)
         data_blocks.append(block)
     np.save(DATA_NPY, data_blocks)
 
@@ -91,11 +91,13 @@ def prepare_tx_sequence(plot = False) -> dict:
     
     # ------------- build sequence --> var(sequence) is a 2D array with time signal blocks in it -------------
     payload = []
+    payload_data_blocks = []
     payload_type = []
     for i in range(TX_REPS):
         payload.append(pilot)
         payload_type.append('pilot')
         payload.append(data_blocks[i])
+        payload_data_blocks.append(data_blocks[i])
         payload_type.append('data')
 
 
@@ -130,11 +132,12 @@ def prepare_tx_sequence(plot = False) -> dict:
         "ofdm_block_len_with_cp" : (len(sequence[2])),
         "cp_len"                 : CP_LEN,
         "block_real?"            : np.isrealobj(pilot),
-        "total_ofdm_length"      : len(np.concatenate(sequence)) - len(chirp_up) - len(add_cyclic_prefix(chirp_down)) - len(silence),
+        "total_ofdm_length"      : len(np.concatenate(payload))*5/4,
         "final_len"              : len(np.concatenate(sequence)),
-        "no_of_payload_blocks"   : len(sequence) - 3,  # excluding silence and chirps
+        "no_of_payload_blocks"   : len(payload_type),  # excluding silence and chirps
         "waveform_blocks"        : sequence,
         "payload_type_list"      : payload_type,
+        "payload_data_blocks"    : payload_data_blocks,
     }
     return { "waveform": np.concatenate(sequence), **info}
 
