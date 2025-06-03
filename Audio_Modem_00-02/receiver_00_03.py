@@ -6,8 +6,9 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch 
 from scipy import signal, fft
 from scipy.io.wavfile import read
-from transmitter_00_02 import generate_chirp, WAV_TX, output        #  <<< changed
+from transmitter_00_02 import generate_chirp, WAV_TX, output        
 import transmitter_00_02 as tx 
+# look into using GPU for hardware acceleration of convolution, e.g. using CuPy for faster processing
 
 # ------------------------------------------------
 #   1.  General parameters (unchanged)
@@ -19,7 +20,7 @@ CHIRP_LEN_S     = tx.CHIRP_LEN_S
 SILENCE_LEN_S   = tx.SILENCE_LEN_S
 F0, F1          = tx.F0, tx.F1
 TX_REPS         = tx.TX_REPS
-WAV_TX          = WAV_TX                               #  keep same name
+WAV_TX          = WAV_TX              
 WAV_RX          = 'rx_recording.wav'
 PILOT_NPY       = 'pilot_symbols.npy'
 COLMAP_NPY      = 'colour_map.npy'
@@ -48,7 +49,7 @@ def load_wav(path):
 # ------------------------------------------------
 #   3.  Synchronisation
 # ------------------------------------------------
-def synchronise(rx:np.ndarray,
+def start_end_synchronise(rx:np.ndarray,
                 chirp_up:np.ndarray,
                 chirp_down:np.ndarray) -> tuple[np.ndarray,int,int]: # colon tells you what type the function takes, and arrow tells you what the function returns
     corr_up   = signal.correlate(rx, chirp_up,   mode='valid')
@@ -62,18 +63,16 @@ def synchronise(rx:np.ndarray,
     start_payload = peak_up + len(chirp_up)
     end_payload   = peak_down - CP_LEN
     payload = rx[start_payload:end_payload]
-    # exp = CP_LEN + TX_REPS*FFT_LEN # !make more robust, pull length from output dictionary 
-    exp = output["info"]["total_ofdm_length"]
+    exp = output["total_ofdm_length"]
     if len(payload) < exp - LENGTH_TOL:
         raise RuntimeError(f"payload {len(payload)} << expected {exp}")
     elif len(payload) < exp:
         payload = np.pad(payload, (0, exp-len(payload)))
     else:
         payload = payload[:exp]
-    return payload, start_payload, end_payload   #  unchanged return
-
+    return payload, start_payload, end_payload   
 # ------------------------------------------------
-#   4.  OFDM helpers  (unchanged)
+#   4.  OFDM helpers 
 # ------------------------------------------------
 # def ofdm_blocks(payload):
 #     blocks, idx = [], CP_LEN # idx = index 
@@ -81,18 +80,29 @@ def synchronise(rx:np.ndarray,
 #         blocks.append(payload[idx:idx+FFT_LEN]); idx += FFT_LEN # !make a more robust function that can handle blocks with cyclic prefixes throughout
 #     return np.array(blocks)
 
-def ofdm_blocks(payload):
-    blocks, idx = [], 0  # idx = index
-    for _ in range(5):
-        blocks.append(payload[idx:idx+FFT_LEN+CP_LEN]); idx += FFT_LEN + CP_LEN  # !make a more robust function that can handle blocks with cyclic prefixes throughout
-        blocks[-1] = blocks[-1][CP_LEN:]  # remove cyclic prefix
-    return np.array(blocks)
+# def ofdm_blocks(payload):
+#     blocks, idx = [], 0  # idx = index
+#     for _ in range(5):
+#         blocks.append(payload[idx:idx+FFT_LEN+CP_LEN]); idx += FFT_LEN + CP_LEN  # !make a more robust function that can handle blocks with cyclic prefixes throughout
+#         blocks[-1] = blocks[-1][CP_LEN:]  # remove cyclic prefix
+#     return np.array(blocks)
+
+def time_OFDM_blocks(payload, block_length_time = output["ofdm_block_len_with_cp"]):
+    time_blocks = []
+    if len(payload)%block_length_time != 0:
+        raise ValueError("Payload length is not a multiple of block length.")
+    for i in range(len(payload)//block_length_time - 0):
+        i = i # allows for future non prefixed code at the beginning of the payload
+        time_blocks.append(payload[i*block_length_time:(i+1)*block_length_time])
+        time_blocks[-1] = time_blocks[-1][CP_LEN:]
+    return np.array(time_blocks)
+
 
 def freq_domain(blocks_td:np.ndarray) -> np.ndarray:
-    return fft.fft(blocks_td, axis=1)[:, 1:FFT_LEN//2] #trimming to get useful part, removing 0 DC component and Nyquist frequency
+    return fft.fft(blocks_td, axis=1)[:, 1:FFT_LEN//2] 
 
 # ------------------------------------------------
-#   5.  Channel estimation  (NEW options)          <<< changed
+#   5.  Channel estimation  
 # ------------------------------------------------
 def channel_estimate(rx_fd:np.ndarray, # !we have to implement this ourselves, not allowed to use inbuilt functions for channel estimation - we're going to need an extra input to measure SNR
                      pilot:np.ndarray, # ! check RX is 1 OFDM block, otherwise formula for channhel estimation returns far too long channel estimate
@@ -268,7 +278,7 @@ if __name__ == "__main__":
     chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
 
     print(len(recording))
-    sync = synchronise(recording, chirp_up, chirp_down)
+    sync = start_end_synchronise(recording, chirp_up, chirp_down)
     print(sync)
     print(sync[0], sync[1], sync[2]) # payload, start payload, end payload
 

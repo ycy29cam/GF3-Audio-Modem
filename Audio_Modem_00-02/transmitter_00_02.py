@@ -91,9 +91,12 @@ def prepare_tx_sequence(plot = False) -> dict:
     
     # ------------- build sequence --> var(sequence) is a 2D array with time signal blocks in it -------------
     payload = []
+    payload_type = []
     for i in range(TX_REPS):
         payload.append(pilot)
+        payload_type.append('pilot')
         payload.append(data_blocks[i])
+        payload_type.append('data')
 
 
     sequence = [
@@ -124,13 +127,14 @@ def prepare_tx_sequence(plot = False) -> dict:
         "leading_silence_samples": len(silence),
         "chirp_samples"          : len(chirp_up),
         "ofdm_block_len"         : FFT_LEN,
-        "ofdm_block_len_with_cp" : (len(sequence[5])),
+        "ofdm_block_len_with_cp" : (len(sequence[2])),
         "cp_len"                 : CP_LEN,
         "block_real?"            : np.isrealobj(pilot),
         "total_ofdm_length"      : len(np.concatenate(sequence)) - len(chirp_up) - len(add_cyclic_prefix(chirp_down)) - len(silence),
         "final_len"              : len(np.concatenate(sequence)),
         "no_of_payload_blocks"   : len(sequence) - 3,  # excluding silence and chirps
-        "waveform_blocks"        : sequence
+        "waveform_blocks"        : sequence,
+        "payload_type_list"      : payload_type,
     }
     return { "waveform": np.concatenate(sequence), **info}
 
