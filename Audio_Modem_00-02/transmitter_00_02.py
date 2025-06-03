@@ -12,7 +12,7 @@ CP_LEN          = FFT_LEN // 4   # cyclic-prefix length
 CHIRP_LEN_S     = 0.5              # chirp duration (seconds)
 SILENCE_LEN_S   = 1.0  
 F0, F1          = 20, 10000      # chirp start / end frequencies (Hz)
-TX_REPS         = 8              # 1 pilot + 7 identical data blocks 
+TX_REPS         = 10              # 1 pilot + 7 identical data blocks 
 WAV_TX          = 'tx_sequence.wav'
 WAV_RX          = 'rx_recording.wav'
 PILOT_NPY       = 'pilot_symbols.npy'
@@ -89,7 +89,7 @@ def prepare_tx_sequence(plot = False) -> dict:
     np.save(PILOT_NPY, freq_pilot)
 
     
-    # ------------- build sequence --> sequence is a 2D array with time signal blocks in it -------------
+    # ------------- build sequence --> var(sequence) is a 2D array with time signal blocks in it -------------
     payload = []
     for i in range(TX_REPS):
         payload.append(pilot)
@@ -112,14 +112,14 @@ def prepare_tx_sequence(plot = False) -> dict:
 # ------------- plot function -------------
     if plot:
         plt.figure(figsize=(10, 3))
-        plt.plot(sequence, lw=0.7)
+        plt.plot(np.concatenate(sequence), lw=0.7)
         plt.title("Transmit waveform (time domain)")
         plt.xlabel("sample")
         plt.ylabel("amplitude")
         plt.tight_layout()
         plt.show()
 
-# ------------- flat dictionary ---> waveform is a flattened sequence, waveform_blocks is unflattened -------------
+# ------------- flat dictionary ---> key{waveform} is a flattened sequence, key{waveform_blocks} is unflattened -------------
     info = {
         "leading_silence_samples": len(silence),
         "chirp_samples"          : len(chirp_up),
@@ -190,9 +190,9 @@ def prepare_tx_sequence(plot = False) -> dict:
 def play_audio(sig:np.ndarray, fs:int=FS):
     sd.play(sig, fs); sd.wait()
 
-output = prepare_tx_sequence()
+output = prepare_tx_sequence(True)
 
 if __name__ == "__main__":
 
-    play_audio(output["waveform"])
+    # play_audio(output["waveform"])
     pass

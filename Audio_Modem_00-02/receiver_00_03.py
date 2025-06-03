@@ -10,14 +10,6 @@ from transmitter_00_02 import generate_chirp, WAV_TX, output        #  <<< chang
 import transmitter_00_02 as tx 
 
 # ------------------------------------------------
-#   !!! READ ME !!!
-#   
-#   Implemented channel estimation for the specific case, where five blocks are transmitted
-#   | pilot | pilot | data | pilot | pilot |
-#   Average of the pilots is taken for channel estimation
-# ------------------------------------------------
-
-# ------------------------------------------------
 #   1.  General parameters (unchanged)
 # ------------------------------------------------
 FS              = tx.FS
@@ -33,12 +25,12 @@ PILOT_NPY       = 'pilot_symbols.npy'
 COLMAP_NPY      = 'colour_map.npy'
 CHAN_NPY        = 'channel_estimate.npy'
 
-CHIRP_ATTEN     = 0.80
-TARGET_PEAK     = 0.80
-LENGTH_TOL      = 512 # might be worth reducing this, bit error length ~ 2 to 5 bits
+CHIRP_ATTEN     = tx.CHIRP_ATTEN
+TARGET_PEAK     = tx.TARGET_PEAK
+LENGTH_TOL      = tx.LENGTH_TOL
 
 # ------------------------------------------------
-#   2.  I/O helpers  (unchanged)
+#   2.  Input/Output
 # ------------------------------------------------
 def record_audio(expected_len:int, fs:int=FS) -> np.ndarray:
     print(f"Recording ≈{expected_len/fs:.2f} s …")
@@ -54,14 +46,14 @@ def load_wav(path):
     return data.astype(np.float32)
 
 # ------------------------------------------------
-#   3.  Synchronisation  (unchanged)
+#   3.  Synchronisation
 # ------------------------------------------------
 def synchronise(rx:np.ndarray,
                 chirp_up:np.ndarray,
                 chirp_down:np.ndarray) -> tuple[np.ndarray,int,int]: # colon tells you what type the function takes, and arrow tells you what the function returns
     corr_up   = signal.correlate(rx, chirp_up,   mode='valid')
     peak_up   = np.argmax(corr_up)
-
+ 
     corr_down = signal.correlate(rx, chirp_down, mode='valid')
     search_from = peak_up + len(chirp_up) # search for down-chirp after up-chirp
     peak_down = np.where(corr_down > 0.8*corr_down.max())[0] #formatting, 2D - 1D but no information loss
