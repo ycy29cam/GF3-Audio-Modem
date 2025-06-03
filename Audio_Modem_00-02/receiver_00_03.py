@@ -104,39 +104,61 @@ def freq_domain(blocks_td:np.ndarray) -> np.ndarray:
 # ------------------------------------------------
 #   5.  Channel estimation  
 # ------------------------------------------------
-def channel_estimate(rx_fd:np.ndarray, # !we have to implement this ourselves, not allowed to use inbuilt functions for channel estimation - we're going to need an extra input to measure SNR
-                     pilot:np.ndarray, # ! check RX is 1 OFDM block, otherwise formula for channhel estimation returns far too long channel estimate
-                     method:str='zf',               #  <<< changed
-                     noise_var:float=1e-4) -> np.ndarray:
+def channel_estimate(useful_frequency_blocks: np.ndarray, pilot_symbols: np.ndarray, method: str = 'zf',noise_var: float = 1e-4) -> np.ndarray:
 
-    #   Different estimation function
-    #   Method : 'zf' (default) or 'mmse'
     eps = 1e-12
-    H_list = []  # list to store channel estimates for each block
-    for i in rx_fd:
-        if method.lower() == 'mmse':                    #  <<< changed
-            H_zf  = i / (pilot + eps)
-            Rhh   = np.mean(np.abs(H_zf)**2)
-            H_hat = (Rhh / (Rhh + noise_var)) * H_zf
-        else:                                           #  zero-forcing
-            H_hat = i / (pilot + eps)
-        H_list.append(H_hat) # append each channel estimate to a list
-    H_list_pilot = H_list[0:1]+H_list[3:4]
-    H_hat_av = np.mean(H_list_pilot, axis=1)
-    np.save(CHAN_NPY, H_hat_av)
-    return H_hat
+    averaged_channel_estimates = []
+    payload_type_list = output["payload_type_list"]  # list of 'pilot' and 'data' for each block
 
+    def estimate_block(freq_block):
+        h_zf = freq_block / (pilot_symbols + eps)
+        # if method.lower() == 'mmse':
+        #     Rhh = np.mean(np.abs(h_zf)**2)
+        #     return (Rhh / (Rhh + noise_var)) * h_zf
+        return h_zf
 
+    # Pre-compute estimates for all pilot blocks
+    pilot_estimates = [estimate_block(freq_block) for freq_block, btype in zip(useful_frequency_blocks, payload_type_list) if btype == 'pilot']
 
-def equalise(rx_fd:np.ndarray, H:np.ndarray) -> np.ndarray:
+    # Iterate and estimate for data blocks based on nearby pilots
+    for idx, btype in enumerate(payload_type_list):
+        if btype == 'data':
+            # Find surrounding pilot indices
+            prev_pilot = next((j for j in range(idx - 1, -1, -1) if payload_type_list[j] == 'pilot'), None)
+            next_pilot = next((j for j in range(idx + 1, len(payload_type_list)) if payload_type_list[j] == 'pilot'), None)
+
+            # Get channel estimates from pilot blocks
+            averaged_channel_estimates = []
+            if prev_pilot is not None:
+                averaged_channel_estimates.append(estimate_block(useful_frequency_blocks[prev_pilot]))
+            if next_pilot is not None:
+                averaged_channel_estimates.append(estimate_block(useful_frequency_blocks[next_pilot]))
+
+            avg_est = np.mean(averaged_channel_estimates, axis=0)
+            averaged_channel_estimates.append(avg_est)
+
+    H_est_array = np.array(averaged_channel_estimates)
+    np.save(CHAN_NPY, H_est_array)
+    return H_est_array
+
+def reconstruct_data_blocks(useful_frequency_blocks, H_est_array):
+    payload_type_list = output["payload_type_list"]  # list of 'pilot' and 'data' for each block
+    assert len(useful_frequency_blocks) == len(payload_type_list), "Mismatch between blocks and payload types"
+    assert len(H_est_array) == payload_type_list.count("data"), "Mismatch between channel estimates and payload types"
+    data_blocks = [useful_frequency_blocks[idx] for idx, btype in enumerate(payload_type_list) if btype == 'data']
+    data_blocks = np.array(data_blocks) 
+    decoded_datablocks = H_est_array // data_blocks  # element-wise division
+    return decoded_datablocks
+
+def equalise(rx_fd, H):
     return rx_fd / H
 
-def _normalise_symbols(z):
-    """unit-power normalisation after equalisation"""
-    return z / (np.sqrt(np.mean(np.abs(z)**2)) + 1e-12)
+# def _normalise_symbols(z):
+#     """unit-power normalisation after equalisation"""
+#     return z / (np.sqrt(np.mean(np.abs(z)**2)) + 1e-12)
 
 # ------------------------------------------------
-#   6.  New visualisation helpers                 <<< changed
+#   6.  New visualisation helpers                
 # ------------------------------------------------
 def plot_channel(H:np.ndarray):
     """Visualise magnitude & phase of the estimated channel."""
@@ -164,7 +186,7 @@ def compare_tx_rx(rx:np.ndarray, start:int, end:int, tx_path:str=WAV_TX):
 
     m = max(np.max(np.max(np.abs(rx_seg))), 1e-3) 
     n = max(np.max(np.max(np.abs(tx_seg))), 1e-3) 
-    tx_seg, rx_seg = tx_seg/m, rx_seg/m #-#-# normalised amplitudes by respective max values  
+    tx_seg, rx_seg = tx_seg/n, rx_seg/m #-#-# normalised amplitudes by respective max values  
 
     plt.figure(figsize=(10,3))
     plt.plot(tx_seg, label='TX (norm.)', lw=.8)
@@ -174,7 +196,7 @@ def compare_tx_rx(rx:np.ndarray, start:int, end:int, tx_path:str=WAV_TX):
     plt.legend(); plt.tight_layout(); plt.show()
 
 # ------------------------------------------------
-#   7.  Spectrum & constellation (unchanged)
+#   7.  Spectrum & constellation 
 # ------------------------------------------------
 def _means_by_colour(z_flat, colours_flat):
     ucols = np.unique(colours_flat) # pulls out an array of the unique(in this case 4 colours) colours used
@@ -187,84 +209,156 @@ def spectrum_plot(sig:np.ndarray, fs:int=FS):
     plt.title("Received PSD"); plt.xlabel("Hz"); plt.ylabel("PSD [V²/Hz]")
     plt.tight_layout(); plt.show()
  
-def constellation_plot(eq_fd: np.ndarray): # essentially takes in already equalised( i.e channel effects removed) frequency domain symbols and plots them using the transmitter symbol colours - the colours will loop round after base colur length is exceeded so you can plot multiple symbols at once - it also adds a legend to the plot
-    # ------------------------------------------------------------
-    # 1.  Build a colour array that is **exactly** len(eq_fd)
-    # ------------------------------------------------------------
-    base_col = np.load(COLMAP_NPY, allow_pickle=True)
+# def constellation_plot(eq_fd: np.ndarray): # essentially takes in already equalised( i.e channel effects removed) frequency domain symbols and plots them using the transmitter symbol colours - the colours will loop round after base colur length is exceeded so you can plot multiple symbols at once - it also adds a legend to the plot
+#     # ------------------------------------------------------------
+#     # 1.  Build a colour array that is **exactly** len(eq_fd)
+#     # ------------------------------------------------------------
+#     base_col = np.load(COLMAP_NPY, allow_pickle=True)
 
-    # --- unwrap “array([list([...])], dtype=object)” -------------
-    if (base_col.ndim == 1 and len(base_col) == 1
-            and isinstance(base_col[0], (list, np.ndarray))):
-        base_col = np.asarray(base_col[0], dtype=str)
+#     # --- unwrap “array([list([...])], dtype=object)” -------------
+#     if (base_col.ndim == 1 and len(base_col) == 1
+#             and isinstance(base_col[0], (list, np.ndarray))):
+#         base_col = np.asarray(base_col[0], dtype=str)
 
-    base_col = np.asarray(base_col, dtype=str)         # make flat 1-D
+#     base_col = np.asarray(base_col, dtype=str)         # make flat 1-D
 
-    if base_col.size == 0:
-        base_col = np.array(['k'])                     # fallback colour
+#     if base_col.size == 0:
+#         base_col = np.array(['k'])                     # fallback colour
 
-    reps     = int(np.ceil(eq_fd.size / base_col.size))
-    colours  = np.tile(base_col, reps)[:eq_fd.size]
+#     reps     = int(np.ceil(eq_fd.size / base_col.size))
+#     colours  = np.tile(base_col, reps)[:eq_fd.size]
 
-    # ------------------------------------------------------------
-    # 2.  Normalise constellation energy
-    # ------------------------------------------------------------
-    eq_fd_n = eq_fd / (np.sqrt(np.mean(np.abs(eq_fd)**2)) + 1e-12)
+#     # ------------------------------------------------------------
+#     # 2.  Normalise constellation energy
+#     # ------------------------------------------------------------
+#     eq_fd_n = eq_fd / (np.sqrt(np.mean(np.abs(eq_fd)**2)) + 1e-12)
 
-    eq_fd_n = eq_fd_n.ravel()          # <<<  NEW  (make it 1-D)
-    colours = colours.ravel()          # <<<  NEW  (defensive; already 1-D)
+#     eq_fd_n = eq_fd_n.ravel()          # <<<  NEW  (make it 1-D)
+#     colours = colours.ravel()          # <<<  NEW  (defensive; already 1-D)
 
-    # ------------------------------------------------------------
-    # 3.  Scatter plot
-    # ------------------------------------------------------------
-    plt.figure(); plt.axhline(0,c='k'); plt.axvline(0,c='k')
-    plt.scatter(eq_fd_n.real, eq_fd_n.imag,
-                c=colours, s=12, edgecolors='none', alpha=.82)
+#     # ------------------------------------------------------------
+#     # 3.  Scatter plot
+#     # ------------------------------------------------------------
+#     plt.figure(); plt.axhline(0,c='k'); plt.axvline(0,c='k')
+#     plt.scatter(eq_fd_n.real, eq_fd_n.imag,
+#                 c=colours, s=12, edgecolors='none', alpha=.82)
 
-    # ------------------------------------------------------------
-    # 4.  Legend – map each colour to nominal point
-    # ------------------------------------------------------------
-    # Use the transmitter’s colour dictionary if available
+#     # ------------------------------------------------------------
+#     # 4.  Legend – map each colour to nominal point
+#     # ------------------------------------------------------------
+#     # Use the transmitter’s colour dictionary if available
+#     try:
+#         from transmitter_00_02 import Q_COL
+#         colour_map = {v:k for k,v in Q_COL.items()}  # colour→bits
+#         label_map  = {'00':'1+1j','01':'1-1j','11':'-1-1j','10':'-1+1j'}
+#         legend_elems = []
+#         for c in np.unique(colours):
+#             bits = ''.join(map(str, colour_map.get(c, ('?','?'))))
+#             legend_elems.append(
+#                 Patch(facecolor=c, label=label_map.get(bits, bits)))
+#         plt.legend(handles=legend_elems, loc='upper right', fontsize='small')
+#     except ImportError:
+#         pass  # transmitter not available – skip legend
+
+#     # ------------------------------------------------------------
+#     # 5.  Per-quadrant means (computed on **normalised** points)
+#     # ------------------------------------------------------------
+#     means = {c: np.mean(eq_fd_n[colours == c]) for c in np.unique(colours)}
+#     for c, m in means.items():
+#         plt.plot(m.real, m.imag, 'kx')
+#         plt.text(m.real, m.imag,
+#                  f"{m.real:+.2f}+{m.imag:+.2f}j",
+#                  fontsize=7, ha='left', va='bottom')
+
+#     plt.title("Equalised constellation (unit power)")
+#     plt.xlabel("I"); plt.ylabel("Q")
+#     plt.gca().set_aspect('equal'); plt.tight_layout(); plt.show()
+
+#     # ---- console read-out --------------------------------------
+#     print("\nConstellation means by colour:")
+#     for c, m in means.items():
+#         print(f"{c}: {m.real:+.3f}{m.imag:+.3f}j")
+
+# def simple_constellation_plot(eq_fd:np.ndarray):
+#     col = np.load(COLMAP_NPY)
+#     colours = np.tile(col,1)
+#     plt.figure(); plt.axhline(0,c='k'); plt.axvline(0,c='k')
+#     plt.scatter(eq_fd[1].real, eq_fd[1].imag, c=colours,
+#                 s=10, alpha=.85, edgecolors='none')
+#     plt.title("Equalised constellation"); plt.xlabel("I"); plt.ylabel("Q")
+#     plt.gca().set_aspect('equal'); plt.tight_layout(); plt.show()
+
+
+
+def plot_constellation_blocks(decoded_blocks, indices=None):
+    """
+    Plot constellation points for one or multiple decoded OFDM data blocks.
+
+    Parameters:
+    - decoded_blocks: np.ndarray or list/array of np.ndarrays
+        Equalised frequency-domain decoded blocks to plot.
+    - indices: list[int] or None
+        Optional indices specifying which blocks to plot (if decoded_blocks is a list).
+        If None, plots all blocks if input is a list, or the single block if input is an array.
+
+    Behavior:
+    - Normalizes each block to unit power.
+    - Cycles through a base color map loaded from COLMAP_NPY for points.
+    - Adds a legend showing the symbol mapping if available.
+    """
+    # Make sure decoded_blocks is a list of arrays
+    if isinstance(decoded_blocks, np.ndarray) and decoded_blocks.ndim > 1:
+        # Already a 2D array, treat as one block
+        blocks_to_plot = [decoded_blocks]
+    else:
+        # Assume list-like or 1D array of blocks
+        blocks_to_plot = list(decoded_blocks)
+
+    if indices is not None:
+        blocks_to_plot = [blocks_to_plot[i] for i in indices]
+
+    # Load base colors
+    base_colors = np.load(COLMAP_NPY, allow_pickle=True)
+    if base_colors.ndim == 1 and len(base_colors) == 1 and isinstance(base_colors[0], (list, np.ndarray)):
+        base_colors = np.asarray(base_colors[0], dtype=str)
+    base_colors = np.asarray(base_colors, dtype=str)
+    if base_colors.size == 0:
+        base_colors = np.array(['k'])
+
+    plt.figure()
+    plt.axhline(0, c='k'); plt.axvline(0, c='k')
+
+    # Plot each block with cyclic colors
+    for block_idx, block in enumerate(blocks_to_plot):
+        block = np.asarray(block).ravel()
+        # Normalize block power to unit power
+        norm_block = block / (np.sqrt(np.mean(np.abs(block)**2)) + 1e-12)
+        reps = int(np.ceil(norm_block.size / base_colors.size))
+        colors = np.tile(base_colors, reps)[:norm_block.size]
+
+        plt.scatter(norm_block.real, norm_block.imag, c=colors, s=12, alpha=0.8, label=f"Block {indices[block_idx] if indices else block_idx}")
+
+    # Legend setup, if transmitter color map is available
     try:
         from transmitter_00_02 import Q_COL
-        colour_map = {v:k for k,v in Q_COL.items()}  # colour→bits
-        label_map  = {'00':'1+1j','01':'1-1j','11':'-1-1j','10':'-1+1j'}
-        legend_elems = []
-        for c in np.unique(colours):
+        colour_map = {v: k for k, v in Q_COL.items()}  # color to bits mapping
+        label_map = {'00': '1+1j', '01': '1-1j', '11': '-1-1j', '10': '-1+1j'}
+        unique_colors = np.unique(base_colors)
+        legend_elements = []
+        for c in unique_colors:
             bits = ''.join(map(str, colour_map.get(c, ('?','?'))))
-            legend_elems.append(
-                Patch(facecolor=c, label=label_map.get(bits, bits)))
-        plt.legend(handles=legend_elems, loc='upper right', fontsize='small')
+            legend_elements.append(Patch(facecolor=c, label=label_map.get(bits, bits)))
+        plt.legend(handles=legend_elements, loc='upper right', fontsize='small')
     except ImportError:
-        pass  # transmitter not available – skip legend
-
-    # ------------------------------------------------------------
-    # 5.  Per-quadrant means (computed on **normalised** points)
-    # ------------------------------------------------------------
-    means = {c: np.mean(eq_fd_n[colours == c]) for c in np.unique(colours)}
-    for c, m in means.items():
-        plt.plot(m.real, m.imag, 'kx')
-        plt.text(m.real, m.imag,
-                 f"{m.real:+.2f}+{m.imag:+.2f}j",
-                 fontsize=7, ha='left', va='bottom')
+        pass  # no transmitter module, skip legend
 
     plt.title("Equalised constellation (unit power)")
-    plt.xlabel("I"); plt.ylabel("Q")
-    plt.gca().set_aspect('equal'); plt.tight_layout(); plt.show()
+    plt.xlabel("In-phase (I)")
+    plt.ylabel("Quadrature (Q)")
+    plt.gca().set_aspect('equal')
+    plt.tight_layout()
+    plt.show()
 
-    # ---- console read-out --------------------------------------
-    print("\nConstellation means by colour:")
-    for c, m in means.items():
-        print(f"{c}: {m.real:+.3f}{m.imag:+.3f}j")
-
-def simple_constellation_plot(eq_fd:np.ndarray):
-    col = np.load(COLMAP_NPY)
-    colours = np.tile(col,1)
-    plt.figure(); plt.axhline(0,c='k'); plt.axvline(0,c='k')
-    plt.scatter(eq_fd[1].real, eq_fd[1].imag, c=colours,
-                s=10, alpha=.85, edgecolors='none')
-    plt.title("Equalised constellation"); plt.xlabel("I"); plt.ylabel("Q")
-    plt.gca().set_aspect('equal'); plt.tight_layout(); plt.show()
 
 
 if __name__ == "__main__":
