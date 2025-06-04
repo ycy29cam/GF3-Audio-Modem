@@ -286,7 +286,7 @@ def symbol_error_rate(eq_fd: np.ndarray):
     # 1) Load reference pilot bits
     pilot_syms = np.load(PILOT_NPY)         # shape = (tones,)
     base_col   = np.load(COLMAP_NPY, allow_pickle=True)
-    from transmitter import Q_COL
+    from transmitter_01 import Q_COL
     inv_map = {v:k for k,v in Q_COL.items()}  # colour→(b0,b1)
 
     # unwrap nested
@@ -333,57 +333,87 @@ SAMPLE_RATE, transmission = read("tx_sequence.wav")
 chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
 chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
 
-# ------------------------------------------------------------
-# 1.  First Pass (to estimate Delta f)
-# ------------------------------------------------------------
+def one_pass(method="zf"):
+    print("---------- First Pass ----------")
+    print("Length of recording: ", len(recording))
+    sync = synchronise(recording, chirp_up, chirp_down)
+    print("Payload: ", sync[0], "Cut-off point 1: ", sync[1], "Cut-off point 2: ", sync[2])
 
-print("---------- First Pass ----------")
-print("Length of recording: ", len(recording))
-sync = synchronise(recording, chirp_up, chirp_down)
-print("Payload: ", sync[0], "Cut-off point 1: ", sync[1], "Cut-off point 2: ", sync[2])
+    compare_tx_rx(recording, sync[1], sync[2])
 
-compare_tx_rx(recording, sync[1], sync[2])
+    split_block = ofdm_blocks(sync[0])
+    freq_block = freq_domain(split_block)
+    print("Frequency block shape: ", freq_block.shape)
 
-split_block = ofdm_blocks(sync[0])
-freq_block = freq_domain(split_block)
-print("Frequency block shape: ", freq_block.shape)
+    channel = channel_estimate(np.asarray(freq_block), np.load("pilot_symbols.npy"), method)
+    plot_channel(channel)
+    eq_block = equalise(np.asarray(freq_block), channel)
+    print("Shape of equalised OFDM blocks: ", eq_block.shape)
+    spectrum_plot(recording)
+    simple_constellation_plot(np.asarray(eq_block))
+    constellation_plot(np.asarray(eq_block))
+    symbol_error_rate(eq_block)
+    return
 
-freq_block_corr, phis = remove_cpe(freq_block)
-df_est = refine_cfo(phis)
-print("Delta f estimate: ", df_est)
+def two_pass(method="zf"):
+    # ------------------------------------------------------------
+    # 1.  First Pass (to estimate Delta f)
+    # ------------------------------------------------------------
 
-# ------------------------------------------------------------
-# 2.  Second Pass (to remove CPE)
-# ------------------------------------------------------------
+    print("---------- First Pass ----------")
+    print("Length of recording: ", len(recording))
+    sync = synchronise(recording, chirp_up, chirp_down)
+    print("Payload: ", sync[0], "Cut-off point 1: ", sync[1], "Cut-off point 2: ", sync[2])
 
-n = np.arange(len(recording))
-derotator = np.exp(-1j * 2* np.pi * df_est * n / FS)
-dr_recording = np.asarray(recording * derotator).real
+    compare_tx_rx(recording, sync[1], sync[2])
 
-print("---------- Second Pass ----------")
-print("Length of recording: ", len(recording))
-re_sync = synchronise(dr_recording, chirp_up, chirp_down)
-print("Payload: ", re_sync[0], "Cut-off point 1: ", re_sync[1], "Cut-off point 2: ", re_sync[2])
+    split_block = ofdm_blocks(sync[0])
+    freq_block = freq_domain(split_block)
+    print("Frequency block shape: ", freq_block.shape)
 
-compare_tx_rx(dr_recording, re_sync[1], re_sync[2])
+    channel = channel_estimate(np.asarray(freq_block), np.load("pilot_symbols.npy"), method)
+    plot_channel(channel)
+    eq_block = equalise(np.asarray(freq_block), channel)
 
-re_split_block = ofdm_blocks(re_sync[0])
-re_freq_block = freq_domain(re_split_block)
-print("Frequency block shape: ", re_freq_block.shape)
+    freq_block_corr, phis = remove_cpe(eq_block)
+    df_est = refine_cfo(phis)
+    print("Delta f estimate: ", df_est)
 
-re_freq_block_corr, re_phis = remove_cpe(re_freq_block)
-re_df_est = refine_cfo(re_phis)
-print("Delta f estimate: ", re_df_est)
+    # ------------------------------------------------------------
+    # 2.  Second Pass (to remove CPE)
+    # ------------------------------------------------------------
 
-# ------------------------------------------------------------
-# 3.  Kept the same
-# ------------------------------------------------------------
+    n = np.arange(len(recording))
+    derotator = np.exp(-1j * 2* np.pi * df_est * n / FS)
+    dr_recording = np.asarray(recording * derotator).real
 
-channel = channel_estimate(np.asarray(re_freq_block_corr), np.load("pilot_symbols.npy"), "mmse")
-plot_channel(channel)
-eq_block = equalise(np.asarray(re_freq_block_corr), channel)
-print("Shape of equalised OFDM blocks: ", eq_block.shape)
-spectrum_plot(dr_recording)
-simple_constellation_plot(np.asarray(eq_block))
-constellation_plot(np.asarray(eq_block))
-symbol_error_rate(eq_block)
+    print("---------- Second Pass ----------")
+    print("Length of recording: ", len(recording))
+    re_sync = synchronise(dr_recording, chirp_up, chirp_down)
+    print("Payload: ", re_sync[0], "Cut-off point 1: ", re_sync[1], "Cut-off point 2: ", re_sync[2])
+
+    compare_tx_rx(dr_recording, re_sync[1], re_sync[2])
+
+    re_split_block = ofdm_blocks(re_sync[0])
+    re_freq_block = freq_domain(re_split_block)
+    print("Frequency block shape: ", re_freq_block.shape)
+
+    re_freq_block_corr, re_phis = remove_cpe(re_freq_block)
+    re_df_est = refine_cfo(re_phis)
+    print("Delta f estimate: ", re_df_est)
+
+    # ------------------------------------------------------------
+    # 3.  Kept the same
+    # ------------------------------------------------------------
+
+    re_channel = channel_estimate(np.asarray(re_freq_block_corr), np.load("pilot_symbols.npy"), "mmse")
+    plot_channel(re_channel)
+    re_eq_block = equalise(np.asarray(re_freq_block_corr), re_channel)
+    print("Shape of equalised OFDM blocks: ", re_eq_block.shape)
+    spectrum_plot(dr_recording)
+    simple_constellation_plot(np.asarray(re_eq_block))
+    constellation_plot(np.asarray(re_eq_block))
+    symbol_error_rate(re_eq_block)
+    return
+
+one_pass("tikhonov")

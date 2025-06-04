@@ -363,7 +363,7 @@ def constellation_plot(eq_fd: np.ndarray):
     # ------------------------------------------------------------
     # Use the transmitter’s colour dictionary if available
     try:
-        from transmitter import Q_COL
+        from transmitter_01 import Q_COL
         colour_map = {v:k for k,v in Q_COL.items()}  # colour→bits
         label_map  = {'00':'-1-1j','01':'-1+1j','11':'1+1j','10':'1-1j'}
         legend_elems = []
@@ -412,7 +412,7 @@ def symbol_error_rate(eq_fd: np.ndarray):
     # 1) Load reference pilot bits
     pilot_syms = np.load(PILOT_NPY)         # shape = (tones,)
     base_col   = np.load(COLMAP_NPY, allow_pickle=True)
-    from transmitter import Q_COL
+    from transmitter_01 import Q_COL
     inv_map = {v:k for k,v in Q_COL.items()}  # colour→(b0,b1)
 
     # unwrap nested
@@ -475,7 +475,10 @@ split_block = ofdm_blocks(sync[0])
 freq_block = freq_domain(split_block)
 print("Frequency block shape: ", freq_block.shape)
 
-freq_block_corr, phis = remove_cpe(freq_block)
+eq_block, channel, decoded_bits = adaptive_channel_equalise(freq_block, pilot, method="mmse", noise_var=1e-4, n_mean=1, do_decision_directed=True)
+plot_channel(channel)
+
+freq_block_corr, phis = remove_cpe(eq_block)
 df_est = refine_cfo(phis)
 print("Delta f estimate: ", df_est)
 
@@ -506,10 +509,10 @@ print("Delta f estimate: ", re_df_est)
 # 3.  Kept the same
 # ------------------------------------------------------------
 
-eq_block, channel, decoded_bits = adaptive_channel_equalise(re_freq_block_corr, pilot, method="tikhonov", noise_var=1e-4, n_mean=1, do_decision_directed=True)
-plot_channel(channel)
-print("Shape of equalised OFDM blocks: ", eq_block.shape)
+re_eq_block, re_channel, re_decoded_bits = adaptive_channel_equalise(re_freq_block_corr, pilot, method="tikhonov", noise_var=1e-4, n_mean=1, do_decision_directed=True)
+plot_channel(re_channel[-1])
+print("Shape of equalised OFDM blocks: ", re_eq_block.shape)
 spectrum_plot(dr_recording)
-simple_constellation_plot(np.asarray(eq_block))
-constellation_plot(np.asarray(eq_block))
-symbol_error_rate(eq_block) 
+simple_constellation_plot(np.asarray(re_eq_block))
+constellation_plot(np.asarray(re_eq_block))
+symbol_error_rate(re_eq_block)
