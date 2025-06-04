@@ -53,10 +53,11 @@ def start_end_synchronise(rx:np.ndarray,
                 chirp_up:np.ndarray,
                 chirp_down:np.ndarray) -> tuple[np.ndarray,int,int]: # colon tells you what type the function takes, and arrow tells you what the function returns
     corr_up   = signal.correlate(rx, chirp_up,   mode='valid')
-    plt.plot(corr_up, label='up-chirp correlation')
     peak_up   = np.argmax(corr_up) 
     corr_down = signal.correlate(rx, chirp_down, mode='valid')
+    plt.plot(corr_up, label='up-chirp correlation')
     plt.plot(corr_down, label='down-chirp correlation')
+    plt.plot(rx*10000, label='received signal', alpha=0.5,)
     search_from = peak_up + len(chirp_up) # search for down-chirp after up-chirp
     peak_down = np.where(corr_down > 0.8*corr_down.max())[0] #formatting, 2D - 1D but no information loss
     peak_down = peak_down[peak_down > search_from][0]
@@ -72,6 +73,7 @@ def start_end_synchronise(rx:np.ndarray,
         payload = np.pad(payload, (0, exp-len(payload)))
     else:
         payload = payload[:exp]
+    # sf.write("chopped_payload_sound.wav", payload, FS)
     return payload, start_payload, end_payload   
 # ------------------------------------------------
 #   4.  OFDM helpers 
@@ -483,6 +485,7 @@ if __name__ == "__main__":
     #------------------import sound file--------------------------------
     # record_audio(480000)
     SAMPLE_RATE, recording = read('rx_recording.wav')
+    # recording = output["waveform"] # works flawlessly, which tells me i'm doing the theory correctly, i'm just missing correction details
     SAMPLE_RATE, transmission = read("tx_sequence.wav")
     chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
     chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
