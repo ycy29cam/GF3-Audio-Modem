@@ -500,14 +500,10 @@ if __name__ == "__main__":
     #when we eventually work with unknown data blocks, we would then need to do maximum likelihood estimation to find the most likely data blocks from the reconstructed data blocks
     #for now we will just plot the equalised blocks and see how they look qualitatively
     plot_equalised_blocks(reconstructed_data[0], output["payload_data_blocks"][0])
-
-
     
 
 
-
-
-
+    
     #------------------testing outputs--------------------------------
     print(len(recording))
     print ("transmitted signal: ", payload,"start bin: ", start_payload, "end bin: ", end_payload)
