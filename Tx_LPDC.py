@@ -251,7 +251,7 @@ if __name__ == "__main__":
 # sd.play(sig, fs); sd.wait()
 
 
-## SHOULD OUTPUT:
+## THIS CODE SHOULD OUTPUT:
 #colour_map.npy        ←  length=4095 array of ints (unchanged)
 #data_symbols.npy      ←  shape = (TX_REPS, 1944)   # ← changed!
 #pilot_symbols.npy     ←  shape = (4095,)          # unchanged
