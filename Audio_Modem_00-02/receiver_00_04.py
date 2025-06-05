@@ -59,7 +59,7 @@ def start_end_synchronise(rx:np.ndarray,
     plt.plot(corr_down, label='down-chirp correlation')
     plt.plot(rx*10000, label='received signal', alpha=0.5,)
     search_from = peak_up + len(chirp_up) # search for down-chirp after up-chirp
-    peak_down = np.where(corr_down > 0.8*corr_down.max())[0] #formatting, 2D - 1D but no information loss
+    peak_down = np.where(corr_down > 0.5*corr_down.max())[0] #formatting, 2D - 1D but no information loss
     peak_down = peak_down[peak_down > search_from][0]
 
     start_payload = peak_up + len(chirp_up)
@@ -499,7 +499,7 @@ if __name__ == "__main__":
     reconstructed_data = reconstruct_data_blocks(useful_freq_blocks, h_estimated_array)
     #when we eventually work with unknown data blocks, we would then need to do maximum likelihood estimation to find the most likely data blocks from the reconstructed data blocks
     #for now we will just plot the equalised blocks and see how they look qualitatively
-    plot_equalised_blocks(reconstructed_data[0], output["payload_data_blocks"][0])
+    plot_equalised_blocks(reconstructed_data[4], output["payload_data_blocks"][4])
 
 
     

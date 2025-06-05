@@ -9,9 +9,9 @@ from scipy import signal, fft
 FS              = 48_000         # audio sample-rate (Hz)
 FFT_LEN         = 8192           # size of one OFDM symbol (must be even)
 CP_LEN          = FFT_LEN // 4   # cyclic-prefix length
-CHIRP_LEN_S     = 0.5              # chirp duration (seconds)
+CHIRP_LEN_S     = 1/2           # chirp duration (seconds)
 SILENCE_LEN_S   = 1.0
-F0, F1          = 20, 10000      # chirp start / end frequencies (Hz)
+F0, F1          = 3000,0     # chirp start / end frequencies (Hz)
 TX_REPS         = 5              # 1 pilot + 7 identical data blocks (Comment seems outdated, it's TX_REPS pilot/data pairs)
 WAV_TX          = 'tx_sequence.wav'
 WAV_RX          = 'rx_recording.wav'
