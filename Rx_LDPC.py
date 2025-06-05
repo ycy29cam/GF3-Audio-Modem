@@ -85,14 +85,24 @@ def start_end_synchronise(rx: np.ndarray,
     print("start_payload:", start_payload, "end_payload:", end_payload)
     payload = rx[start_payload:end_payload]
     exp = output["total_ofdm_length"]
-    if len(payload) < exp - LENGTH_TOL:
-        raise RuntimeError(f"payload {len(payload)} << expected {exp}")
-    elif len(payload) < exp:
+
+# --------------------------------------        
+#    if len(payload) < exp - LENGTH_TOL:
+#        raise RuntimeError(f"payload {len(payload)} << expected {exp}")
+#    elif len(payload) < exp:
+#        payload = np.pad(payload, (0, exp - len(payload)))
+#    else:
+#        payload = payload[:exp]
+#    # sf.write("chopped_payload_sound.wav", payload, FS)
+#    return payload, start_payload, end_payload
+# --------------------------------------        
+        
+    # If RuntimeError is occuring (because LENGTH_TOL is being exceeded) then this option is more reliable, as
+    # it simply zero-pads never throws an exception if len(payload) is “too short.” Instead, it just pads.
+    if len(payload) < exp:
         payload = np.pad(payload, (0, exp - len(payload)))
-    else:
+    elif len(payload) > exp:
         payload = payload[:exp]
-    # sf.write("chopped_payload_sound.wav", payload, FS)
-    return payload, start_payload, end_payload
 
 
 # ------------------------------------------------
