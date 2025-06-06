@@ -500,7 +500,7 @@ if __name__ == "__main__":
     #when we eventually work with unknown data blocks, we would then need to do maximum likelihood estimation to find the most likely data blocks from the reconstructed data blocks
     #for now we will just plot the equalised blocks and see how they look qualitatively
     plot_equalised_blocks(reconstructed_data[0], output["payload_data_blocks"][0])
-    
+
 
 
     
@@ -514,5 +514,18 @@ if __name__ == "__main__":
 
     #-------------------to correct----------------------------------
     """
-    the time domain chopper works, but the input payload is 2 prefixed blocks too long - find source before or withing time domain chopper
+    //switch from 1 data 1 pilot to 4 data 1 pilot, and implement the padding at the end to finish on 4 data blocks - see 2 standardisation meetings back
+    //change the pilot generation to fill only 1-4095 and put the other 2 values to 0 
+    //change the chirp to sine version as outlined on slack code dump
+    //synchronise for each OFDM symbol using either a) a moving window as per yesterday or b) a cross correlation function, this might not work super well, am gonna test first and plot to see how the peaks look
+    //normalise the recieved signal so that your signal has the correct magnitude, getting a factor of 1-2/4 out which is problematic
+    //think about cutting out the very beginning of the recording, although probably less necessary with a longer start chirp. 
+    //change the channel estimation method to use the nearest n blocks say, which should give more robust channel noise averaging, especially if each estimated channel response is synchronised correctly. 
+    //check our constellation mapping is 00 - 10 - 11 - 01 going anticlockwise
+    //add a set of "guard" bins set to 0 for the time being after the starting downchirp
+    //check what amplitude we want to send our white noise at ( eg scaled by 1, 0.1 ect - might be moot for the speakers)
+    //add a time based linear interpolation time compensation (using chatGPT code, MAX) but run it on each block once resynchronised if possible, or run it over the whole thing and still resynchronise, whatever works easier.
+    //add in useful data in bin 200 to 2143 (both inclusive), using python's indexing function,  especially useful for knowing when it comes to LDPC codes. this gives a useful data rate of 1944 bits.
+    //add padding at the end, a frame is Pilot, data, data, data, data. sometimes doesnt finish in that format, so need to detect that and pad the end (with random noise, or 0's more likely) - the number of blocks can be done after normalisation by taking modulo 5 and adding that many prefixed(or non prefixed whatever) bits to our signal.
+
     """
