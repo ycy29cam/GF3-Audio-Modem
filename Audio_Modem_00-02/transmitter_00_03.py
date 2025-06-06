@@ -172,7 +172,7 @@ def prepare_tx_sequence(plot = False) -> dict:
 
 output = prepare_tx_sequence(True)
 if __name__ == "__main__":
-    output = prepare_tx_sequence(True)
+    # output = prepare_tx_sequence(True)
     pass
 
 

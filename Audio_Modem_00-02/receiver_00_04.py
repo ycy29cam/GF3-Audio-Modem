@@ -22,6 +22,8 @@ F0, F1          = tx.F0, tx.F1
 TX_REPS         = tx.TX_REPS
 WAV_TX          = WAV_TX              
 WAV_RX          = 'rx_recording.wav'
+WAV_RX_1        = 'rx_recording_group1.wav'
+WAV_RX_3        = 'rx_recording_group3.wav'
 PILOT_NPY       = 'pilot_symbols.npy'
 COLMAP_NPY      = 'colour_map.npy'
 CHAN_NPY        = 'channel_estimate.npy'
@@ -57,10 +59,11 @@ def start_end_synchronise(rx:np.ndarray,
     corr_down = signal.correlate(rx, chirp_down, mode='valid')
     plt.plot(corr_up, label='up-chirp correlation')
     plt.plot(corr_down, label='down-chirp correlation')
-    plt.plot(rx*10000, label='received signal', alpha=0.5,)
+    plt.plot(rx*5000, label='received signal', alpha=0.5,)
     search_from = peak_up + len(chirp_up) # search for down-chirp after up-chirp
     peak_down = np.where(corr_down > 0.5*corr_down.max())[0] #formatting, 2D - 1D but no information loss
     peak_down = peak_down[peak_down > search_from][0]
+    
 
     start_payload = peak_up + len(chirp_up)
     end_payload   = peak_down 
@@ -75,21 +78,6 @@ def start_end_synchronise(rx:np.ndarray,
         payload = payload[:exp]
     # sf.write("chopped_payload_sound.wav", payload, FS)
     return payload, start_payload, end_payload   
-# ------------------------------------------------
-#   4.  OFDM helpers 
-# ------------------------------------------------
-# def ofdm_blocks(payload):
-#     blocks, idx = [], CP_LEN # idx = index 
-#     for _ in range(TX_REPS):
-#         blocks.append(payload[idx:idx+FFT_LEN]); idx += FFT_LEN # !make a more robust function that can handle blocks with cyclic prefixes throughout
-#     return np.array(blocks)
-
-# def ofdm_blocks(payload):
-#     blocks, idx = [], 0  # idx = index
-#     for _ in range(5):
-#         blocks.append(payload[idx:idx+FFT_LEN+CP_LEN]); idx += FFT_LEN + CP_LEN  # !make a more robust function that can handle blocks with cyclic prefixes throughout
-#         blocks[-1] = blocks[-1][CP_LEN:]  # remove cyclic prefix
-#     return np.array(blocks)
 
 def time_OFDM_chopper(payload, block_length_time = output["ofdm_block_len_with_cp"]):
     time_blocks = []
@@ -107,51 +95,8 @@ def time_OFDM_chopper(payload, block_length_time = output["ofdm_block_len_with_c
 def freq_domain(blocks_td:np.ndarray) -> np.ndarray:
     return fft.fft(blocks_td, axis=1)[:, 1:FFT_LEN//2] 
 
-# ------------------------------------------------
-#   5.  Channel estimation  
-# ------------------------------------------------
-# def channel_estimate(useful_frequency_blocks: np.ndarray, pilot_symbols: np.ndarray, method: str = 'zf',noise_var: float = 1e-4) -> np.ndarray:
-
-#     eps = 1e-12
-#     averaged_channel_estimates = []
-#     payload_type_list = output["payload_type_list"]  # list of 'pilot' and 'data' for each block
-
-#     def estimate_block(freq_block):
-#         h_zf = freq_block / (pilot_symbols + eps)
-#         # if method.lower() == 'mmse':
-#         #     Rhh = np.mean(np.abs(h_zf)**2)
-#         #     return (Rhh / (Rhh + noise_var)) * h_zf
-#         return h_zf
-
-#     # Pre-compute estimates for all pilot blocks
-#     pilot_estimates = [estimate_block(freq_block) for freq_block, btype in zip(useful_frequency_blocks, payload_type_list) if btype == 'pilot']
-
-#     # Iterate and estimate for data blocks based on nearby pilots
-#     for idx, btype in enumerate(payload_type_list):
-#         if btype == 'data':
-#             # Find surrounding pilot indices
-#             prev_pilot = next((j for j in range(idx - 1, -1, -1) if payload_type_list[j] == 'pilot'), None)
-#             next_pilot = next((j for j in range(idx + 1, len(payload_type_list)) if payload_type_list[j] == 'pilot'), None)
-
-#             # Get channel estimates from pilot blocks
-#             averaged_channel_estimates = []
-#             if prev_pilot is not None:
-#                 averaged_channel_estimates.append(estimate_block(useful_frequency_blocks[prev_pilot]))
-#             if next_pilot is not None:
-#                 averaged_channel_estimates.append(estimate_block(useful_frequency_blocks[next_pilot]))
-
-#             avg_est = np.mean(averaged_channel_estimates, axis=0)
-#             averaged_channel_estimates.append(avg_est)
-
-#     H_est_array = np.array(averaged_channel_estimates)
-#     np.save(CHAN_NPY, H_est_array)
-#     return H_est_array
-
-
-
-
 def channel_estimation(blocks: np.ndarray,
-                     pilot_symbol: np.ndarray,
+                     pilot_symbols: np.ndarray,
                      method: str = 'zf',
                      noise_var: float = 1e-4) -> np.ndarray:
     
@@ -161,9 +106,7 @@ def channel_estimation(blocks: np.ndarray,
     estimates = [None] * N
 
     def estimate_pilot_channel(freq_block: np.ndarray) -> np.ndarray:
-        return freq_block / (pilot_symbol + eps)
-
-
+        return freq_block / (pilot_symbols[i] + eps)
 
     # 1. fill in pilot estimates
     for i, t in enumerate(payload_type_list):
@@ -201,8 +144,6 @@ def reconstruct_data_blocks(useful_frequency_blocks, H_est_array):
 def equalise(rx_fd, H):
     return rx_fd / H
  
-
-
 # ------------------------------------------------
 #   6. Visualisation helpers                
 # ------------------------------------------------
@@ -249,14 +190,12 @@ def compare_tx_rx(rx:np.ndarray, start_rx_payload:int, end_rx_payload_boundary:i
     m_peak = np.max(np.abs(rx_payload_seg)) if rx_payload_seg.size > 0 else 0
     n_peak = np.max(np.abs(tx_payload_seg)) if tx_payload_seg.size > 0 else 0
     
-
-    
     tx_norm = tx_payload_seg / n_peak
     rx_norm = rx_payload_seg / m_peak
 
     plt.figure(figsize=(10,3))
     plt.plot(tx_norm, label='TX Payload (norm.)', lw=.8)
-    plt.plot(rx_norm, label='RX Payload (norm.)', lw=.6, alpha=.7)
+    plt.plot(rx_payload_seg, label='RX Payload (norm.)', lw=.6, alpha=.7)
     plt.title("TX vs RX OFDM Payload (aligned)")
     plt.xlabel("sample in payload")
     plt.ylabel("normalised amplitude")
@@ -275,156 +214,6 @@ def spectrum_plot(sig:np.ndarray, fs:int=FS):
     plt.title("Received PSD"); plt.xlabel("Hz"); plt.ylabel("PSD [V²/Hz]")
     plt.tight_layout(); plt.show()
  
-# def constellation_plot(eq_fd: np.ndarray): # essentially takes in already equalised( i.e channel effects removed) frequency domain symbols and plots them using the transmitter symbol colours - the colours will loop round after base colur length is exceeded so you can plot multiple symbols at once - it also adds a legend to the plot
-#     # ------------------------------------------------------------
-#     # 1.  Build a colour array that is **exactly** len(eq_fd)
-#     # ------------------------------------------------------------
-#     base_col = np.load(COLMAP_NPY, allow_pickle=True)
-
-#     # --- unwrap “array([list([...])], dtype=object)” -------------
-#     if (base_col.ndim == 1 and len(base_col) == 1
-#             and isinstance(base_col[0], (list, np.ndarray))):
-#         base_col = np.asarray(base_col[0], dtype=str)
-
-#     base_col = np.asarray(base_col, dtype=str)         # make flat 1-D
-
-#     if base_col.size == 0:
-#         base_col = np.array(['k'])                     # fallback colour
-
-#     reps     = int(np.ceil(eq_fd.size / base_col.size))
-#     colours  = np.tile(base_col, reps)[:eq_fd.size]
-
-#     # ------------------------------------------------------------
-#     # 2.  Normalise constellation energy
-#     # ------------------------------------------------------------
-#     eq_fd_n = eq_fd / (np.sqrt(np.mean(np.abs(eq_fd)**2)) + 1e-12)
-
-#     eq_fd_n = eq_fd_n.ravel()          # <<<  NEW  (make it 1-D)
-#     colours = colours.ravel()          # <<<  NEW  (defensive; already 1-D)
-
-#     # ------------------------------------------------------------
-#     # 3.  Scatter plot
-#     # ------------------------------------------------------------
-#     plt.figure(); plt.axhline(0,c='k'); plt.axvline(0,c='k')
-#     plt.scatter(eq_fd_n.real, eq_fd_n.imag,
-#                 c=colours, s=12, edgecolors='none', alpha=.82)
-
-#     # ------------------------------------------------------------
-#     # 4.  Legend – map each colour to nominal point
-#     # ------------------------------------------------------------
-#     # Use the transmitter’s colour dictionary if available
-#     try:
-#         from transmitter_00_02 import Q_COL
-#         colour_map = {v:k for k,v in Q_COL.items()}  # colour→bits
-#         label_map  = {'00':'1+1j','01':'1-1j','11':'-1-1j','10':'-1+1j'}
-#         legend_elems = []
-#         for c in np.unique(colours):
-#             bits = ''.join(map(str, colour_map.get(c, ('?','?'))))
-#             legend_elems.append(
-#                 Patch(facecolor=c, label=label_map.get(bits, bits)))
-#         plt.legend(handles=legend_elems, loc='upper right', fontsize='small')
-#     except ImportError:
-#         pass  # transmitter not available – skip legend
-
-#     # ------------------------------------------------------------
-#     # 5.  Per-quadrant means (computed on **normalised** points)
-#     # ------------------------------------------------------------
-#     means = {c: np.mean(eq_fd_n[colours == c]) for c in np.unique(colours)}
-#     for c, m in means.items():
-#         plt.plot(m.real, m.imag, 'kx')
-#         plt.text(m.real, m.imag,
-#                  f"{m.real:+.2f}+{m.imag:+.2f}j",
-#                  fontsize=7, ha='left', va='bottom')
-
-#     plt.title("Equalised constellation (unit power)")
-#     plt.xlabel("I"); plt.ylabel("Q")
-#     plt.gca().set_aspect('equal'); plt.tight_layout(); plt.show()
-
-#     # ---- console read-out --------------------------------------
-#     print("\nConstellation means by colour:")
-#     for c, m in means.items():
-#         print(f"{c}: {m.real:+.3f}{m.imag:+.3f}j")
-
-# def simple_constellation_plot(eq_fd:np.ndarray):
-#     col = np.load(COLMAP_NPY)
-#     colours = np.tile(col,1)
-#     plt.figure(); plt.axhline(0,c='k'); plt.axvline(0,c='k')
-#     plt.scatter(eq_fd[1].real, eq_fd[1].imag, c=colours,
-#                 s=10, alpha=.85, edgecolors='none')
-#     plt.title("Equalised constellation"); plt.xlabel("I"); plt.ylabel("Q")
-#     plt.gca().set_aspect('equal'); plt.tight_layout(); plt.show()
-
-
-
-# def plot_constellation_blocks(decoded_blocks, indices=None):
-#     """
-#     Plot constellation points for one or multiple decoded OFDM data blocks.
-
-#     Parameters:
-#     - decoded_blocks: np.ndarray or list/array of np.ndarrays
-#         Equalised frequency-domain decoded blocks to plot.
-#     - indices: list[int] or None
-#         Optional indices specifying which blocks to plot (if decoded_blocks is a list).
-#         If None, plots all blocks if input is a list, or the single block if input is an array.
-
-#     Behavior:
-#     - Normalizes each block to unit power.
-#     - Cycles through a base color map loaded from COLMAP_NPY for points.
-#     - Adds a legend showing the symbol mapping if available.
-#     """
-#     # Make sure decoded_blocks is a list of arrays
-#     if isinstance(decoded_blocks, np.ndarray) and decoded_blocks.ndim > 1:
-#         # Already a 2D array, treat as one block
-#         blocks_to_plot = [decoded_blocks]
-#     else:
-#         # Assume list-like or 1D array of blocks
-#         blocks_to_plot = list(decoded_blocks)
-
-#     if indices is not None:
-#         blocks_to_plot = [blocks_to_plot[i] for i in indices]
-
-#     # Load base colors
-#     base_colors = np.load(COLMAP_NPY, allow_pickle=True)
-#     if base_colors.ndim == 1 and len(base_colors) == 1 and isinstance(base_colors[0], (list, np.ndarray)):
-#         base_colors = np.asarray(base_colors[0], dtype=str)
-#     base_colors = np.asarray(base_colors, dtype=str)
-#     if base_colors.size == 0:
-#         base_colors = np.array(['k'])
-
-#     plt.figure()
-#     plt.axhline(0, c='k'); plt.axvline(0, c='k')
-
-#     # Plot each block with cyclic colors
-#     for block_idx, block in enumerate(blocks_to_plot):
-#         block = np.asarray(block).ravel()
-#         # Normalize block power to unit power
-#         norm_block = block / (np.sqrt(np.mean(np.abs(block)**2)) + 1e-12)
-#         reps = int(np.ceil(norm_block.size / base_colors.size))
-#         colors = np.tile(base_colors, reps)[:norm_block.size]
-
-#         plt.scatter(norm_block.real, norm_block.imag, c=colors, s=12, alpha=0.8, label=f"Block {indices[block_idx] if indices else block_idx}")
-
-#     # Legend setup, if transmitter color map is available
-#     try:
-#         from transmitter_00_02 import Q_COL
-#         colour_map = {v: k for k, v in Q_COL.items()}  # color to bits mapping
-#         label_map = {'00': '1+1j', '01': '1-1j', '11': '-1-1j', '10': '-1+1j'}
-#         unique_colors = np.unique(base_colors)
-#         legend_elements = []
-#         for c in unique_colors:
-#             bits = ''.join(map(str, colour_map.get(c, ('?','?'))))
-#             legend_elements.append(Patch(facecolor=c, label=label_map.get(bits, bits)))
-#         plt.legend(handles=legend_elements, loc='upper right', fontsize='small')
-#     except ImportError:
-#         pass  # no transmitter module, skip legend
-
-#     plt.title("Equalised constellation (unit power)")
-#     plt.xlabel("In-phase (I)")
-#     plt.ylabel("Quadrature (Q)")
-#     plt.gca().set_aspect('equal')
-#     plt.tight_layout()
-#     plt.show()
-
 def plot_equalised_blocks(equalised_data_blocks: np.ndarray, sequenced_data_blocks: np.ndarray):
     """
     Plot equalised constellation blocks with correct colouring and legend.
@@ -471,7 +260,7 @@ def plot_equalised_blocks(equalised_data_blocks: np.ndarray, sequenced_data_bloc
     legend_handles = []
     for bits, colour in Q_COL.items():
         bit_str = ''.join(map(str, bits))
-        label = bits_to_sym.get(bit_str, bit_str)
+        label = bits_to_sym.get(bit_str, bit_str) 
         legend_handles.append(Patch(facecolor=colour, label=label))
     plt.legend(handles=legend_handles, loc='upper right', fontsize='small')
 
@@ -486,7 +275,7 @@ if __name__ == "__main__":
     # record_audio(480000)
     SAMPLE_RATE, recording = read('rx_recording.wav')
     # recording = output["waveform"] # works flawlessly, which tells me i'm doing the theory correctly, i'm just missing correction details
-    SAMPLE_RATE, transmission = read("tx_sequence.wav")
+    # SAMPLE_RATE, transmission = read("tx_sequence.wav")
     chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
     chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
 
@@ -499,7 +288,7 @@ if __name__ == "__main__":
     reconstructed_data = reconstruct_data_blocks(useful_freq_blocks, h_estimated_array)
     #when we eventually work with unknown data blocks, we would then need to do maximum likelihood estimation to find the most likely data blocks from the reconstructed data blocks
     #for now we will just plot the equalised blocks and see how they look qualitatively
-    plot_equalised_blocks(reconstructed_data[0], output["payload_data_blocks"][0])
+    plot_equalised_blocks(reconstructed_data[8], output["payload_data_blocks"][8])
 
 
 
