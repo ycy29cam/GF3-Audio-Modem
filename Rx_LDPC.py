@@ -87,22 +87,22 @@ def start_end_synchronise(rx: np.ndarray,
     exp = output["total_ofdm_length"]
 
 # --------------------------------------        
-#    if len(payload) < exp - LENGTH_TOL:
-#        raise RuntimeError(f"payload {len(payload)} << expected {exp}")
-#    elif len(payload) < exp:
-#        payload = np.pad(payload, (0, exp - len(payload)))
-#    else:
-#        payload = payload[:exp]
-#    # sf.write("chopped_payload_sound.wav", payload, FS)
-#    return payload, start_payload, end_payload
+    if len(payload) < exp - LENGTH_TOL:
+        raise RuntimeError(f"payload {len(payload)} << expected {exp}")
+    elif len(payload) < exp:
+        payload = np.pad(payload, (0, exp - len(payload)))
+    else:
+        payload = payload[:exp]
+    # sf.write("chopped_payload_sound.wav", payload, FS)
+    return payload, start_payload, end_payload
 # --------------------------------------        
         
     # If RuntimeError is occuring (because LENGTH_TOL is being exceeded) then this option is more reliable, as
     # it simply zero-pads never throws an exception if len(payload) is “too short.” Instead, it just pads.
-    if len(payload) < exp:
-        payload = np.pad(payload, (0, exp - len(payload)))
-    elif len(payload) > exp:
-        payload = payload[:exp]
+    # if len(payload) < exp:
+    #     payload = np.pad(payload, (0, exp - len(payload)))
+    # elif len(payload) > exp:
+    #     payload = payload[:exp]
 
 
 # ------------------------------------------------
@@ -325,7 +325,7 @@ def plot_equalised_blocks(equalised_data_blocks: np.ndarray, sequenced_data_bloc
 
 if __name__ == "__main__":
     # 1) Optionally record in real time, or load a pre-existing file
-    record_audio(480000)
+    # record_audio(480000)
     SAMPLE_RATE, recording = read('rx_recording.wav')
 
     # 2) Load TX waveform (for synchronisation)
@@ -396,7 +396,7 @@ if __name__ == "__main__":
     # 8) Plot one constellation for sanity (optional)
     plot_equalised_blocks(
         reconstructed_data[0][:LDPC_N],  # take only the first 1944 symbols
-        output["payload_data_blocks"][0]  # this is already length=1944
+        output["payload_data_blocks"][4]  # this is already length=1944
     )
         # after LDPC‐packing, each OFDM “data” block now has 4095 equalized QPSK symbols (including
         # the zero‐padding), whereas output["payload_data_blocks"][i] is only the first 1944 symbols
