@@ -19,6 +19,7 @@ PILOT_NPY       = 'pilot_symbols.npy'
 DATA_NPY        = 'data_symbols.npy' # Will now store frequency-domain data symbols
 COLMAP_NPY      = 'colour_map.npy'
 CHAN_NPY        = 'channel_estimate.npy'
+PILOT_TIME_NO_CP_NPY = "time_pilot_blocks_no_cp.npy"
 
 CHIRP_ATTEN      = 0.80            # scale applied to both chirps
 TARGET_PEAK      = 0.80            # peak of every OFDM block after scaling
@@ -114,7 +115,8 @@ def prepare_tx_sequence(plot = False) -> dict:
 
 
     np.save(COLMAP_NPY, pilot_colours)
-    np.save(PILOT_NPY, pilot_freq_symbols) 
+    np.save(PILOT_NPY, pilot_freq_symbols)
+    np.save(PILOT_TIME_NO_CP_NPY, time_pilot_blocks_no_CP)
 
     # ------------- build sequence --> 'payload' list will contain TD blocks WITHOUT CP -------------
     payload = [] # no CP

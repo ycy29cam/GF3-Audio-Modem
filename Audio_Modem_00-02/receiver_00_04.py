@@ -27,6 +27,7 @@ WAV_RX_3        = 'rx_recording_group3.wav'
 PILOT_NPY       = 'pilot_symbols.npy'
 COLMAP_NPY      = 'colour_map.npy'
 CHAN_NPY        = 'channel_estimate.npy'
+PILOT_TIME_NO_CP_NPY = "time_pilot_blocks_no_cp.npy"
 
 CHIRP_ATTEN     = tx.CHIRP_ATTEN
 TARGET_PEAK     = tx.TARGET_PEAK
@@ -79,17 +80,54 @@ def start_end_synchronise(rx:np.ndarray,
     # sf.write("chopped_payload_sound.wav", payload, FS)
     return payload, start_payload, end_payload   
 
-def time_OFDM_chopper(payload, block_length_time = output["ofdm_block_len_with_cp"]):
+# def time_OFDM_chopper(payload, block_length_time = output["ofdm_block_len_with_cp"]):
+#     time_blocks = []
+#     print(len(payload)) 
+#     print((output["no_of_payload_blocks"]))
+#     if len(payload)%block_length_time != 0:
+#         raise ValueError("Payload length is not a multiple of block length.")
+#     for i in range(len(payload)//block_length_time - 0):
+#         i = i # allows for future non prefixed code at the beginning of the payload
+#         time_blocks.append(payload[i*block_length_time:(i+1)*block_length_time])
+#         time_blocks[-1] = time_blocks[-1][CP_LEN:]
+#     return np.array(time_blocks)
+
+def sync_chopper(payload, start_payload, end_payload, rx, block_length_time = output["ofdm_block_len_with_cp"]):
     time_blocks = []
-    print(len(payload)) 
-    print((output["no_of_payload_blocks"]))
-    if len(payload)%block_length_time != 0:
-        raise ValueError("Payload length is not a multiple of block length.")
-    for i in range(len(payload)//block_length_time - 0):
-        i = i # allows for future non prefixed code at the beginning of the payload
-        time_blocks.append(payload[i*block_length_time:(i+1)*block_length_time])
-        time_blocks[-1] = time_blocks[-1][CP_LEN:]
+    x = start_payload - block_length_time/2
+    y = start_payload + block_length_time*(3/2)
+    #replace with correct number of windows in a sec: 
+    sync_peak_index = []
+    sync_max = []
+    time_pilot_blocks_no_cp = np.load(PILOT_TIME_NO_CP_NPY)
+    for i in range(5):
+        window = rx[x:y]
+        pilot_correlation = signal.correlate(window, time_pilot_blocks_no_cp[i] )
+        plt.plot(pilot_correlation)
+        sync_start = x + np.argmax(pilot_correlation)
+        sync_max.append(np.max(pilot_correlation))
+        sync_peak_index.append(sync_start)
+        chopped_start_index = start_payload + i * 5 * block_length_time
+        bit_diff = (sync_start - chopped_start_index) * (output["modulation_bits_per_sample"])
+        if abs(bit_diff) > 5:
+            print(f" Desync on pilot block {i}: sync start index {sync_start}, expected {chopped_start_index}, diff = {bit_diff} bits")
+            sync_peak_index[-1] = chopped_start_index
+        x += 4*block_length_time
+        y += 4*block_length_time
+
+    for i in sync_peak_index:
+        start = i + block_length_time
+        for _ in range(4):
+            time_blocks.append(payload[start:start+ block_length_time])
+            start += block_length_time
     return np.array(time_blocks)
+    
+    
+
+    
+
+
+
 
 
 def freq_domain(blocks_td:np.ndarray) -> np.ndarray:
