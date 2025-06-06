@@ -29,9 +29,17 @@ Q_COL = { (0,0):'#d62728',  # red
           (1,1):'#2ca02c',  # green
           (1,0):'#ff7f0e'}  # orange
 
-def generate_chirp(f0, f1, dur, fs=FS):
-    t = np.arange(int(dur*fs))/fs
-    return (CHIRP_ATTEN*signal.chirp(t, f0, t[-1], f1)).astype(np.float32)
+# def generate_chirp(f0, f1, dur, fs=FS):
+#     t = np.arange(int(dur*fs))/fs
+#     return (CHIRP_ATTEN*signal.chirp(t, f0, t[-1], f1)).astype(np.float32)
+
+def generate_chirp(f0=F0, f1=F1, dur=CHIRP_LEN_S) -> np.ndarray:
+    t = np.linspace(0, dur, int(dur * FS), endpoint=False)
+    k = (f1 - f0) / dur  # Sweep rate (Hz/s)
+    phase = 2 * np.pi * (f0 * t + 0.5 * k * t**2)
+    signal = np.sin(phase)
+    return (CHIRP_ATTEN * signal).astype(np.float32)
+
 
 def random_bitpairs(n, seed_no=42):
     """ generates a choppable random sequence of bit pairs
@@ -55,13 +63,11 @@ def to_real_ofdm_block(useful_freq_symbols, n=FFT_LEN):
     X[1:half]   = useful_freq_symbols
     X[half+1:]  = np.conj(useful_freq_symbols[::-1])
     x = fft.ifft(X).real.astype(np.float32)
-    # peak normalisation
     peak_val = np.max(np.abs(x))
     if peak_val > 1e-9: # Avoid division by zero for unstable scaling
         x *= TARGET_PEAK/peak_val
     elif TARGET_PEAK == 0:
         x = np.zeros_like(x)
-    # If peak_val is very small and TARGET_PEAK is not zero, x remains small
     return x
 
 def add_cyclic_prefix(x:np.ndarray, cp_len:int=CP_LEN) -> np.ndarray:
@@ -77,46 +83,49 @@ def prepare_tx_sequence(plot = False) -> dict:
     n_qpsk = FFT_LEN//2 - 1
 
     # ------------- build data blocks (now TD without CP) and collect data freq symbols -------------
-    # Original: long_bits = random_bitpairs(n = (TX_REPS * (FFT_LEN + CP_LEN)), seed_no=24)
-    # Corrected 'n' for random_bitpairs for all data bits:
-    _data_long_bits = random_bitpairs(n=(TX_REPS * n_qpsk), seed_no=24)
+    data_long_bits = random_bitpairs(n=(n_qpsk*200), seed_no=24)
+    data_blocks = []  
+    data_freq_symbols_ = [] 
     
-    data_blocks = []  # This list will now store TIME DOMAIN data blocks WITHOUT CP
-    _data_freq_symbols_for_info_dict = [] # To store data QPSK symbols for the output dictionary and .npy file
-
-    for i in range(TX_REPS):
-        # Original: bits = long_bits[i * n_qpsk : (i + 1) * n_qpsk]
-        bits = _data_long_bits[i * n_qpsk : (i + 1) * n_qpsk]
-        syms, _ = qpsk_gray(bits)
-        _data_freq_symbols_for_info_dict.append(syms) # Store freq symbols
-        
-        # Original: block = add_cyclic_prefix(to_real_ofdm_block(syms))
-        # Corrected: create TD block WITHOUT CP
-        block_no_cp = to_real_ofdm_block(syms)
+    for i in range(200):
+        bits = data_long_bits[i * n_qpsk : (i + 1) * n_qpsk]
+        freq_pilot, _ = qpsk_gray(bits)
+        data_freq_symbols_.append(freq_pilot) 
+        block_no_cp = to_real_ofdm_block(freq_pilot)
         data_blocks.append(block_no_cp)
-    
-    # Original: np.save(DATA_NPY, data_blocks) # Saved TD blocks with CP
-    # Corrected: Save FREQUENCY DOMAIN data symbols
-    np.save(DATA_NPY, np.array(_data_freq_symbols_for_info_dict))
 
-    # ------------- build pilot blocks (TD without CP) ------------
-    pilot_bits = random_bitpairs(n_qpsk) # Original used default seed_no=42
-    freq_pilot, colour = qpsk_gray(pilot_bits)
-    pilot = to_real_ofdm_block(freq_pilot) # 'pilot' is TD pilot block WITHOUT CP (this was correct)
-    np.save(COLMAP_NPY, colour)
-    np.save(PILOT_NPY, freq_pilot) # Saves pilot frequency symbols
+
+    np.save(DATA_NPY, np.array(data_freq_symbols_))
+
+    # ------------- build pilot blocks array, (TD without CP) ------------
+    pilot_long_bits = random_bitpairs(n =(n_qpsk * 200))
+    time_pilot_blocks_no_CP = []
+    pilot_freq_symbols = [] 
+    pilot_colours = []
+
+
+    for pilot in range(200):
+        pilot_bits = pilot_long_bits[i * n_qpsk : (i + 1) * n_qpsk]
+        freq_pilot, colour = qpsk_gray(bits)
+        pilot_freq_symbols.append(freq_pilot)
+        pilot_colours.append(colour)
+        block_no_cp = to_real_ofdm_block(freq_pilot)
+        time_pilot_blocks_no_CP.append(block_no_cp)
+
+
+    np.save(COLMAP_NPY, pilot_colours)
+    np.save(PILOT_NPY, pilot_freq_symbols) 
 
     # ------------- build sequence --> 'payload' list will contain TD blocks WITHOUT CP -------------
-    payload = [] # This list will contain TD blocks (pilots and data), all WITHOUT CP
-    # The original local variable 'payload_data_blocks' is no longer needed here for its old purpose.
-    # The 'payload_data_blocks' key in the output 'info' dict will use _data_freq_symbols_for_info_dict.
+    payload = [] # no CP
     payload_type = []
     for i in range(TX_REPS):
-        payload.append(pilot) # pilot is TD, no CP
+        payload.append(time_pilot_blocks_no_CP[i])
         payload_type.append('pilot')
-        payload.append(data_blocks[i]) # data_blocks[i] is now TD, no CP
-        # Original: payload_data_blocks.append(data_blocks[i]) # This was for TD with CP data
-        payload_type.append('data')
+        for j in range(4):
+            payload.append(data_blocks[i * 4 + j])
+            payload_type.append('data')
+
 
     sequence = [
         silence,
@@ -126,10 +135,8 @@ def prepare_tx_sequence(plot = False) -> dict:
         silence
     ]
 
-    # This loop now correctly adds CP to all OFDM blocks and the trailing chirp_down
     for i in range(2, len(sequence) - 2):
         sequence[i] = add_cyclic_prefix(sequence[i])
-
     sf.write(WAV_TX, np.concatenate(sequence), FS) # Write concatenated sequence
     
     # ------------- plot function -------------
@@ -143,10 +150,6 @@ def prepare_tx_sequence(plot = False) -> dict:
         plt.show()
 
     # ------------- Correct calculation for total_ofdm_length -------------
-    # Sum of lengths of OFDM payload blocks (pilots and data) *after* CP has been added.
-    # These are sequence[2] through sequence[2 + len(payload_type) - 1].
-    # All these blocks now have length (FFT_LEN + CP_LEN).
-    # len(payload_type) is the total number of OFDM payload blocks (2 * TX_REPS).
     calculated_total_ofdm_length = len(payload_type) * (FFT_LEN + CP_LEN)
     
     # ------------- flat dictionary ---> key{waveform} is a flattened sequence, key{waveform_blocks} is unflattened -------------
@@ -156,23 +159,20 @@ def prepare_tx_sequence(plot = False) -> dict:
         "ofdm_block_len"         : FFT_LEN,
         "ofdm_block_len_with_cp" : (len(sequence[2])), # Length of first payload block (with CP)
         "cp_len"                 : CP_LEN,
-        "block_real?"            : np.isrealobj(pilot), # 'pilot' is TD, no CP
-        "total_ofdm_length"      : calculated_total_ofdm_length, # CORRECTED
-        "final_len"              : len(np.concatenate(sequence)), # Use concatenated sequence
-        "no_of_payload_blocks"   : len(payload_type),  # Total pilot + data blocks
+        "block_real?"            : np.isrealobj(payload.append(time_pilot_blocks_no_CP[2])), # 'pilot' is TD, no CP
+        "total_ofdm_length"      : calculated_total_ofdm_length, 
+        "final_len"              : len(np.concatenate(sequence)), 
+        "no_of_payload_blocks"   : len(payload_type),
         "waveform_blocks"        : sequence,
         "payload_type_list"      : payload_type,
-        # Corrected: 'payload_data_blocks' key now gets frequency domain QPSK symbols for data blocks
-        "payload_data_blocks"    : np.array(_data_freq_symbols_for_info_dict),
+        "payload_data_blocks"    : np.array(data_freq_symbols_),
     }
-    return { "waveform": np.concatenate(sequence), **info} # Use concatenated sequence
+    return { "waveform": np.concatenate(sequence), **info} 
 
-# This was the original line for testing, kept for consistency:
+
 output = prepare_tx_sequence(True)
-
 if __name__ == "__main__":
-    # Per user request, no additional print statements here.
+    output = prepare_tx_sequence(True)
     pass
 
-# def play_audio(sig:np.ndarray, fs:int=FS): # Definition was in original but commented out
-    # sd.play(sig, fs); sd.wait()
+
