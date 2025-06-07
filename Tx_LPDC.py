@@ -20,6 +20,8 @@ PILOT_NPY = 'pilot_symbols.npy'
 DATA_NPY = 'data_symbols.npy'  # Will now store frequency-domain data symbols
 COLMAP_NPY = 'colour_map.npy'
 CHAN_NPY = 'channel_estimate.npy'
+PILOT_TIME_NO_CP_NPY = "time_pilot_blocks_no_cp.npy"
+
 
 CHIRP_ATTEN = 0.80  # scale applied to both chirps
 TARGET_PEAK = 0.80  # peak of every OFDM block after scaling
@@ -48,9 +50,16 @@ assert 2 * (LDPC_N // 2) <= (FFT_LEN // 2 - 1)
 #-----------------------------------------------------------------------------------------#
 
 
-def generate_chirp(f0, f1, dur, fs=FS):
-    t = np.arange(int(dur * fs)) / fs
-    return (CHIRP_ATTEN * signal.chirp(t, f0, t[-1], f1)).astype(np.float32)
+#def generate_chirp(f0, f1, dur, fs=FS):
+#    t = np.arange(int(dur * fs)) / fs
+#    return (CHIRP_ATTEN * signal.chirp(t, f0, t[-1], f1)).astype(np.float32)
+
+def generate_chirp(f0=F0, f1=F1, dur=CHIRP_LEN_S) -> np.ndarray:
+    t = np.linspace(0, dur, int(dur * FS), endpoint=False)
+    k = (f1 - f0) / dur  # Sweep rate (Hz/s)
+    phase = 2 * np.pi * (f0 * t + 0.5 * k * t**2)
+    signal = np.sin(phase)
+    return (CHIRP_ATTEN * signal).astype(np.float32)
 
 
 def random_bitpairs(n, seed_no=42):
@@ -70,20 +79,32 @@ def qpsk_gray(bitpairs):
 
 
 def to_real_ofdm_block(useful_freq_symbols, n=FFT_LEN):
-    """ converts a sequence of useful frequency symbols to a real OFDM block
+    """Convert a sequence of 'useful' frequency-domain symbols into
+    a time-domain OFDM block with cyclic prefix (IFFT + real conversion).
     """
-    half = n // 2
+    # Number of occupied subcarriers
+    N = len(useful_freq_symbols)
+
+    # Prepare full FFT-bin vector
     X = np.zeros(n, np.complex64)
-    X[1:half] = useful_freq_symbols
-    X[half + 1:] = np.conj(useful_freq_symbols[::-1])
+
+    # Map the 'useful' subcarriers into bins 1 through N
+    X[1: 1 + N] = useful_freq_symbols
+
+    # Mirror those into the negative frequencies for a real time-signal
+    X[-N:] = np.conj(useful_freq_symbols[::-1])
+
+    # IFFT and take real part
     x = fft.ifft(X).real.astype(np.float32)
-    # peak normalisation
+
+    # Peak-normalise
     peak_val = np.max(np.abs(x))
-    if peak_val > 1e-9:  # Avoid division by zero for unstable scaling
+    if peak_val > 1e-9:
         x *= TARGET_PEAK / peak_val
     elif TARGET_PEAK == 0:
+        # Edge-case: if you really want silence
         x = np.zeros_like(x)
-    # If peak_val is very small and TARGET_PEAK is not zero, x remains small
+
     return x
 
 
@@ -99,97 +120,87 @@ def prepare_tx_sequence(plot=False) -> dict:
 
     n_qpsk = FFT_LEN // 2 - 1
 
-    # Build TWO 1944‐bit LDPC codewords per OFDM symbol, map each codeword → 972 QPSK symbols, concatenate those
-    # 972+972 = 1944 symbols, and then scatter them into the 4095 subcarriers
+    # 0) Generate & store all info bits (systematic LDPC code)
+    # We need one 2*K-bit message per OFDM *data* block, and there are TX_REPS * 4 of those
+    rng = np.random.RandomState(seed=24)
+    num_data_blocks = TX_REPS * 4
+    # Each data-block carries TWO LDPC info halves, so 2*LDPC_K bits
+    info_bits = rng.randint(0, 2, size=(num_data_blocks, 2 * LDPC_K), dtype=np.int8)
 
-    # First, compute how many QPSK symbols we need per OFDM symbol:
-    n_data_subc = FFT_LEN // 2 - 1                 # = 4095, total QPSK slots per OFDM symbol
-    symbols_per_ofdm = 2 * (LDPC_N // 2)           # = 2*(1944/2) = 1944 QPSK symbols
-    assert symbols_per_ofdm == 1944
-    assert symbols_per_ofdm <= n_data_subc        # ensures we actually have enough subcarriers
+    # ------------- build data blocks (now TD without CP) and collect data freq symbols -------------
+    data_blocks = []
+    data_freq_symbols_ = []
+    #pilot_colours = []
+    #pilot_freq_symbols = []
+    #time_pilot_blocks_no_CP = []
 
-    # (2‐a) Generate TOTAL_INFO_BITS = TX_REPS * (2 * LDPC_K):
-    # Because each OFDM symbol carries 2 codewords, each of length K=972 info bits,
-    # so per OFDM symbol we need 2*972 = 1944 info bits.
-    total_info_bits = TX_REPS * 2 * LDPC_K        # = TX_REPS * (2*972)
-    info_bits = np.random.RandomState(24).randint(0, 2, size=(total_info_bits,), dtype=np.int8)
+    # Loop over each repetition, encoding two K‐bit info blocks per OFDM symbol
+    """for rep in range(TX_REPS):
+    # 1) Extract the two info‐bit chunks (each length K=972)
+           ib1 = info_bits[rep, : LDPC_K]
+           ib2 = info_bits[rep, LDPC_K: 2 * LDPC_K]
+    # 2) LDPC‐encode each chunk into an N=1944‐bit codeword
+           cw1 = my_ldpc.encode(ib1)
+           cw2 = my_ldpc.encode(ib2)
 
-    data_blocks = []  # This list will now store TIME DOMAIN data blocks WITHOUT CP
-    _data_freq_symbols_for_info_dict = []  # To store data QPSK symbols for the output dictionary and .npy file
+      # 3) Interleave bit‐pairs for QPSK mapping
+           bits_for_qpsk = np.vstack([cw1, cw2]).reshape(-1, 2).astype(int)
 
-    for i in range(TX_REPS):
-        # SLICE OUT the next (2*LDPC_K)=1944 info bits for this OFDM symbol:
-        start_info = i * 2 * LDPC_K
-        end_info = (i + 1) * 2 * LDPC_K
-        this_two_info = info_bits[start_info:end_info]  # shape = (1944,)
+      # 4) Map to complex QPSK symbols
+           freq_syms, _ = qpsk_gray(bits_for_qpsk)
+           data_freq_symbols_.append(freq_syms)
 
-        # SPLIT into two length‐K chunks of 972 bits:
-        first_info_block = this_two_info[0:LDPC_K]  # bits 0..971
-        second_info_block = this_two_info[LDPC_K: 2 * LDPC_K]  # bits 972..1943
+      # 5) Form the time‐domain OFDM block (IFFT + CP)
+           block_no_cp = to_real_ofdm_block(freq_syms)
+           data_blocks.append(block_no_cp) """
 
-        # LDPC‐ENCODE each 972‐bit chunk → 1944‐bit codeword
-        cw1 = my_ldpc.encode(first_info_block)  # shape = (1944,)
-        cw2 = my_ldpc.encode(second_info_block)  # shape = (1944,)
+    # We have num_data_blocks = TX_REPS * 4 total blocks
+    for blk_idx in range(num_data_blocks):
+        # 1) Extract the two info‐bit chunks for this data‐block
+        ib1 = info_bits[blk_idx, : LDPC_K]
+        ib2 = info_bits[blk_idx, LDPC_K: 2 * LDPC_K]
 
-        # Reshape each codeword into QPSK‐bit‐pairs: (1944 bits → 972 pairs)
-        cw1_pairs = np.asarray(cw1, dtype=np.int8).reshape((LDPC_N // 2, 2))
-        cw2_pairs = np.asarray(cw2, dtype=np.int8).reshape((LDPC_N // 2, 2))
+        # 2) LDPC‐encode each chunk into an N=1944‐bit codeword
+        cw1 = my_ldpc.encode(ib1)
+        cw2 = my_ldpc.encode(ib2)
 
-        # CALL qpsk_gray(...) on each (→ returns 972 symbols + their colours)
-        syms1, colours1 = qpsk_gray(cw1_pairs)  # shape of syms1 = (972,) complex
-        syms2, colours2 = qpsk_gray(cw2_pairs)  # shape of syms2 = (972,) complex
+        # 3) Interleave bit‐pairs for QPSK mapping
+        bits_for_qpsk = np.vstack([cw1, cw2]).reshape(-1, 2).astype(int)
 
-        # CONCATENATE syms1 || syms2 → gives 1944 QPSK symbols. We'll scatter these
-        # into the first 1944 data‐subcarriers.  For any remaining subcarriers (positions 1944..4094),
-        # we insert zeros (no data).  That way each OFDM symbol remains length=4095 after pilots,
-        # but only the first 1944 are “active” data, the rest = 0.
-        payload_syms = np.concatenate([syms1, syms2])  # shape = (1944,)
+        # 4) Map to complex QPSK symbols
+        freq_syms, _ = qpsk_gray(bits_for_qpsk)
+        data_freq_symbols_.append(freq_syms)
 
-        # (Optionally) concatenate their colours so that Rx can colour‐code the scatter plot consistently:
-        payload_colours = np.concatenate([colours1, colours2])  # shape = (1944,)
+        # 5) Form the time‐domain OFDM block (IFFT + CP)
+        data_blocks.append(to_real_ofdm_block(freq_syms))
 
-        # ZERO‐PAD to length n_data_subc = 4095, so that the final array “data_subcarrier_syms”
-        # is length 4095:
-        zeros_to_pad = n_data_subc - symbols_per_ofdm  # = 4095 - 1944 = 2151
-        if zeros_to_pad < 0:
-            raise ValueError("ERROR: symbols_per_ofdm > available data‐subcarriers")
-        padding = np.zeros(zeros_to_pad, dtype=complex)  # zeros for the “unused carriers”
-        data_subcarrier_syms = np.concatenate([payload_syms, padding])  # length = 4095
-
-        # SAVE the first-1944 symbols for the “info dict” so Rx can compare them:
-        _data_freq_symbols_for_info_dict.append(payload_syms)
-
-        # BUILD the time‐domain OFDM block (without CP) by calling your existing helper:
-        block_no_cp = to_real_ofdm_block(data_subcarrier_syms)
-        data_blocks.append(block_no_cp)
-        #     • to_real_ofdm_block(...) will do an IFFT of length=FFT_LEN, place these 4095 symbols
-        #       on the correct subcarriers (1..2047 and 2048..4094), then return a real‐valued time‐domain
-        #       block of length=FFT_LEN.
-
-
-    # Original: np.save(DATA_NPY, data_blocks) # Saved TD blocks with CP
-    # Corrected: Save FREQUENCY DOMAIN data symbols
-    np.save(DATA_NPY, np.array(_data_freq_symbols_for_info_dict))  # shape=(TX_REPS, 1944)
-
-
-    # ------------- build pilot blocks (TD without CP) ------------
-    pilot_bits = random_bitpairs(n_qpsk)  # Original used default seed_no=42
-    freq_pilot, colour = qpsk_gray(pilot_bits)
-    pilot = to_real_ofdm_block(freq_pilot)  # 'pilot' is TD pilot block WITHOUT CP (this was correct)
-    np.save(COLMAP_NPY, colour)
-    np.save(PILOT_NPY, freq_pilot)  # Saves pilot frequency symbols
+    #np.save(COLMAP_NPY, np.array(pilot_colours, dtype=object))
+    #np.save(PILOT_NPY, pilot_freq_symbols)
+    #np.save(PILOT_TIME_NO_CP_NPY, time_pilot_blocks_no_CP)
 
     # ------------- build sequence --> 'payload' list will contain TD blocks WITHOUT CP -------------
-    payload = []  # This list will contain TD blocks (pilots and data), all WITHOUT CP
-    # The original local variable 'payload_data_blocks' is no longer needed here for its old purpose.
-    # The 'payload_data_blocks' key in the output 'info' dict will use _data_freq_symbols_for_info_dict.
+    payload = []  # no CP
     payload_type = []
-    for i in range(TX_REPS):
-        payload.append(pilot)  # pilot is TD, no CP
+    time_pilot_blocks_no_cp = []
+    pilot_freq_symbols_ = []
+
+    for rep in range(TX_REPS):
+        # 1) Regenerate a fresh pilot for this rep
+        pilot_bits, _ = qpsk_gray(random_bitpairs(n_qpsk, seed_no=4242 + rep))
+        pilot_td = to_real_ofdm_block(pilot_bits)
+        payload.append(pilot_td)
         payload_type.append('pilot')
-        payload.append(data_blocks[i])  # data_blocks[i] is now TD, no CP
-        # Original: payload_data_blocks.append(data_blocks[i]) # This was for TD with CP data
-        payload_type.append('data')
+
+        time_pilot_blocks_no_cp.append(pilot_td)
+
+        # 2) Append the 4 data blocks for this rep
+        base = rep * 4
+        for j in range(4):
+            payload.append(data_blocks[base + j])
+            payload_type.append('data')
+
+    np.save(PILOT_TIME_NO_CP_NPY, np.array(time_pilot_blocks_no_cp, dtype=object))
+    np.save(PILOT_NPY, np.array(pilot_freq_symbols, dtype=object))
 
     sequence = [
         silence,
@@ -199,10 +210,8 @@ def prepare_tx_sequence(plot=False) -> dict:
         silence
     ]
 
-    # This loop now correctly adds CP to all OFDM blocks and the trailing chirp_down
     for i in range(2, len(sequence) - 2):
         sequence[i] = add_cyclic_prefix(sequence[i])
-
     sf.write(WAV_TX, np.concatenate(sequence), FS)  # Write concatenated sequence
 
     # ------------- plot function -------------
@@ -216,11 +225,10 @@ def prepare_tx_sequence(plot=False) -> dict:
         plt.show()
 
     # ------------- Correct calculation for total_ofdm_length -------------
-    # Sum of lengths of OFDM payload blocks (pilots and data) *after* CP has been added.
-    # These are sequence[2] through sequence[2 + len(payload_type) - 1].
-    # All these blocks now have length (FFT_LEN + CP_LEN).
-    # len(payload_type) is the total number of OFDM payload blocks (2 * TX_REPS).
     calculated_total_ofdm_length = len(payload_type) * (FFT_LEN + CP_LEN)
+
+    for i, syms in enumerate(data_freq_symbols_):
+        print(f" data block {i}: {len(syms)} symbols")
 
     # ------------- flat dictionary ---> key{waveform} is a flattened sequence, key{waveform_blocks} is unflattened -------------
     info = {
@@ -229,16 +237,20 @@ def prepare_tx_sequence(plot=False) -> dict:
         "ofdm_block_len": FFT_LEN,
         "ofdm_block_len_with_cp": (len(sequence[2])),  # Length of first payload block (with CP)
         "cp_len": CP_LEN,
-        "block_real?": np.isrealobj(pilot),  # 'pilot' is TD, no CP
-        "total_ofdm_length": calculated_total_ofdm_length,  # CORRECTED
-        "final_len": len(np.concatenate(sequence)),  # Use concatenated sequence
-        "no_of_payload_blocks": len(payload_type),  # Total pilot + data blocks
+        # sanity‐check: is the very first payload block real?
+        "block_real?": np.isrealobj(sequence[2]),  # sequence[0]=silence, [1]=chirp_up, [2]=first pilot+CP
+        "total_ofdm_length": calculated_total_ofdm_length,
+        "final_len": len(np.concatenate(sequence)),
+        "no_of_payload_blocks": len(payload_type),
         "waveform_blocks": sequence,
         "payload_type_list": payload_type,
-        # Corrected: 'payload_data_blocks' key now gets frequency domain QPSK symbols for data blocks
-        "payload_data_blocks": np.array(_data_freq_symbols_for_info_dict),
+        #"payload_data_blocks": np.array(data_freq_symbols_),
+        "payload_data_blocks": np.stack(data_freq_symbols_),
+
+        "payload_info_bits" : info_bits
+
     }
-    return {"waveform": np.concatenate(sequence), **info}  # Use concatenated sequence
+    return {"waveform": np.concatenate(sequence), **info}
 
 # This was the original line for testing, kept for consistency:
 output = prepare_tx_sequence(True)
@@ -251,7 +263,7 @@ if __name__ == "__main__":
 # sd.play(sig, fs); sd.wait()
 
 
-## THIS CODE SHOULD OUTPUT:
+## SHOULD OUTPUT:
 #colour_map.npy        ←  length=4095 array of ints (unchanged)
 #data_symbols.npy      ←  shape = (TX_REPS, 1944)   # ← changed!
 #pilot_symbols.npy     ←  shape = (4095,)          # unchanged
