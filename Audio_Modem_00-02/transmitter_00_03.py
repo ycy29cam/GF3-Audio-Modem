@@ -105,9 +105,9 @@ def prepare_tx_sequence(plot = False) -> dict:
     pilot_colours = []
 
 
-    for pilot in range(200):
+    for i in range(200):
         pilot_bits = pilot_long_bits[i * n_qpsk : (i + 1) * n_qpsk]
-        freq_pilot, colour = qpsk_gray(bits)
+        freq_pilot, colour = qpsk_gray(pilot_bits)
         pilot_freq_symbols.append(freq_pilot)
         pilot_colours.append(colour)
         block_no_cp = to_real_ofdm_block(freq_pilot)

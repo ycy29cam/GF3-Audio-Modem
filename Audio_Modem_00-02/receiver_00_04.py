@@ -60,7 +60,6 @@ def start_end_synchronise(rx: np.ndarray,
     peak_up   = np.argmax(corr_up)
     corr_down = signal.correlate(rx, chirp_down, mode='valid')
 
-
     search_from = peak_up + len(chirp_up)
     peak_down_locs = np.where(corr_down > 0.5 * corr_down.max())[0]
     peak_down = peak_down_locs[peak_down_locs > search_from][0]
@@ -90,10 +89,10 @@ def start_end_synchronise(rx: np.ndarray,
     else:
         payload = payload[:padded_len]
 
-    # if n_blocks % 5 != 0:
-    #     pad_blocks = 5 - (n_blocks % 5)
-    #     payload = np.pad(payload, (0, pad_blocks * block_len))
-    #     n_blocks += pad_blocks
+    if n_blocks % 5 != 0:
+        pad_blocks = 5 - (n_blocks % 5)
+        payload = np.pad(payload, (0, pad_blocks * block_len))
+        n_blocks += pad_blocks
 
     last_valid_block_index = valid_blocks
     # print(payload.shape)
@@ -101,51 +100,51 @@ def start_end_synchronise(rx: np.ndarray,
     return payload, start_payload, end_payload, last_valid_block_index
 
 
-# def time_OFDM_chopper(payload, block_length_time = output["ofdm_block_len_with_cp"]):
-#     time_blocks = []
-#     print(len(payload)) 
-#     print((output["no_of_payload_blocks"]))
-#     if len(payload)%block_length_time != 0:
-#         raise ValueError("Payload length is not a multiple of block length.")
-#     for i in range(len(payload)//block_length_time - 0):
-#         i = i # allows for future non prefixed code at the beginning of the payload
-#         time_blocks.append(payload[i*block_length_time:(i+1)*block_length_time])
-#         time_blocks[-1] = time_blocks[-1][CP_LEN:]
-#     return np.array(time_blocks)
-
-def sync_chopper(payload, start_payload, end_payload, rx, last_valid_block_index, block_length_time = output["ofdm_block_len_with_cp"]):
+def time_OFDM_chopper(payload, block_length_time = output["ofdm_block_len_with_cp"]):
     time_blocks = []
-    x = int(start_payload - block_length_time/2)
-    y = int(start_payload + block_length_time*(3/2))
-    sync_peak_index = []
-    sync_max = []
-    time_pilot_blocks_no_cp = np.load(PILOT_TIME_NO_CP_NPY)
-    print("the last valid block index is: ", last_valid_block_index)
-    for i in range(last_valid_block_index//5):
-        window = rx[x:y]
-        pilot_correlation = signal.correlate(window, time_pilot_blocks_no_cp[i] )
-        plt.plot(pilot_correlation)
-        plt.show()
-        sync_start = x + np.argmax(pilot_correlation) - FFT_LEN
-        sync_max.append(np.max(pilot_correlation))
-        sync_peak_index.append(sync_start)
-        chopped_start_index = start_payload + i * 5 * block_length_time + CP_LEN
-        bit_diff = (sync_start - chopped_start_index)
-        if abs(bit_diff) > 5:
-            print(f" Desync on pilot block {i}: sync start index {sync_start}, expected {chopped_start_index}, diff = {bit_diff} bits")
-            sync_peak_index[-1] = chopped_start_index
-        x += 5*block_length_time
-        y += 5*block_length_time
+    print(len(payload)) 
+    print((output["no_of_payload_blocks"]))
+    if len(payload)%block_length_time != 0:
+        raise ValueError("Payload length is not a multiple of block length.")
+    for i in range(len(payload)//block_length_time - 0):
+        i = i # allows for future non prefixed code at the beginning of the payload
+        time_blocks.append(payload[i*block_length_time:(i+1)*block_length_time])
+        time_blocks[-1] = time_blocks[-1][CP_LEN:]
+    return np.array(time_blocks)
 
-    for i in sync_peak_index:
-        start = i
-        for _ in range(5):
-            block = rx[start : start + FFT_LEN]
-            print("time block length is: ", len(block))
-            time_blocks.append(block)
-            print(start)
-            start += block_length_time
-    return np.array(time_blocks) 
+# def sync_chopper(payload, start_payload, end_payload, rx, last_valid_block_index, block_length_time = output["ofdm_block_len_with_cp"]):
+#     time_blocks = []
+#     x = int(start_payload - block_length_time/2)
+#     y = int(start_payload + block_length_time*(3/2))
+#     sync_peak_index = []
+#     sync_max = []
+#     time_pilot_blocks_no_cp = np.load(PILOT_TIME_NO_CP_NPY)
+#     print("the last valid block index is: ", last_valid_block_index)
+#     for i in range(last_valid_block_index//5):
+#         window = rx[x:y]
+#         pilot_correlation = signal.correlate(window, time_pilot_blocks_no_cp[i] )
+#         plt.plot(pilot_correlation)
+#         plt.show()
+#         sync_start = x + np.argmax(pilot_correlation) - FFT_LEN 
+#         sync_max.append(np.max(pilot_correlation))
+#         sync_peak_index.append(sync_start)
+#         chopped_start_index = start_payload + i * 5 * block_length_time + CP_LEN
+#         bit_diff = (sync_start - chopped_start_index)
+#         if abs(bit_diff) > 5:
+#             print(f" Desync on pilot block {i}: sync start index {sync_start}, expected {chopped_start_index}, diff = {bit_diff} bits")
+#             sync_peak_index[-1] = chopped_start_index
+#         x += 5*block_length_time
+#         y += 5*block_length_time
+
+#     for i in sync_peak_index:
+#         start = i 
+#         for _ in range(5):
+#             block = rx[start : start + FFT_LEN]
+#             print("time block length is: ", len(block))
+#             time_blocks.append(block)
+#             print(start)
+#             start += block_length_time
+#     return np.array(time_blocks) 
     
 
 
@@ -199,8 +198,6 @@ def reconstruct_data_blocks(useful_frequency_blocks, H_est_array):
     decoded_datablocks = data_blocks/data_H_est_array  # element-wise division
     return decoded_datablocks
 
-def equalise(rx_fd, H):
-    return rx_fd / H
  
 # ------------------------------------------------
 #   6. Visualisation helpers                
@@ -261,10 +258,6 @@ def compare_tx_rx(rx:np.ndarray, start_rx_payload:int, end_rx_payload_boundary:i
 # ------------------------------------------------
 #   7.  Spectrum & constellation 
 # ------------------------------------------------
-def _means_by_colour(z_flat, colours_flat):
-    ucols = np.unique(colours_flat) # pulls out an array of the unique(in this case 4 colours) colours used
-    means = {c: np.mean(z_flat[colours_flat == c]) for c in ucols} # finds the mean of each colour in the constellation
-    return means # a dictionary of colour:mean pairs
 
 def spectrum_plot(sig:np.ndarray, fs:int=FS):
     f, Pxx = signal.welch(sig, fs, nperseg=4096)
@@ -331,8 +324,8 @@ if __name__ == "__main__":
 
     #------------------import sound file--------------------------------
     # record_audio(480000)
-    SAMPLE_RATE, recording = read('rx_recording.wav')
-    # recording = output["waveform"] # works flawlessly, which tells me i'm doing the theory correctly, i'm just missing correction details
+    # SAMPLE_RATE, recording = read('rx_recording.wav')
+    recording = output["waveform"] # works flawlessly, which tells me i'm doing the theory correctly, i'm just missing correction details
     # SAMPLE_RATE, transmission = read("tx_sequence.wav")
     chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
     chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
@@ -340,7 +333,8 @@ if __name__ == "__main__":
 
     #------------------run reciever--------------------------------
     payload, start_payload, end_payload, last_valid_block_index  = start_end_synchronise(recording, chirp_up, chirp_down)
-    time_blocks = sync_chopper(payload ,start_payload, end_payload, recording,last_valid_block_index )
+    # time_blocks = sync_chopper(payload ,start_payload, end_payload, recording,last_valid_block_index )
+    time_blocks = time_OFDM_chopper(payload)
     useful_freq_blocks  = freq_domain(time_blocks)
     h_estimated_array = channel_estimation(useful_freq_blocks, np.load(PILOT_NPY), "zf")
     reconstructed_data = reconstruct_data_blocks(useful_freq_blocks, h_estimated_array)
