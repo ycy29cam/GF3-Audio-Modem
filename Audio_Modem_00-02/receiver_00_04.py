@@ -60,19 +60,24 @@ def start_end_synchronise(rx: np.ndarray,
     peak_up   = np.argmax(corr_up)
     corr_down = signal.correlate(rx, chirp_down, mode='valid')
 
-    plt.plot(corr_up, label='up-chirp correlation')
-    plt.plot(corr_down, label='down-chirp correlation')
-    plt.plot(rx * 5000, label='received signal', alpha=0.5)
 
     search_from = peak_up + len(chirp_up)
     peak_down_locs = np.where(corr_down > 0.5 * corr_down.max())[0]
     peak_down = peak_down_locs[peak_down_locs > search_from][0]
 
     start_payload = peak_up + len(chirp_up)
-    end_payload   = peak_down
+    end_payload   = peak_down + 4 
+
+    plt.plot(corr_up, label='up-chirp correlation')
+    plt.plot(corr_down, label='down-chirp correlation')
+    plt.plot(rx * 5000, label='received signal', alpha=0.5)
+    plt.axvline(start_payload, color='red', linestyle='--', label='start_payload')
+    plt.axvline(end_payload, color='red', linestyle='--', label='end_payload')
+
     print("start_payload:", start_payload, "end_payload:", end_payload)
 
     payload = rx[start_payload:end_payload]
+    print(payload.shape)
 
     block_len = 10240
     n_blocks = int(round(len(payload) / 10240))
@@ -91,6 +96,7 @@ def start_end_synchronise(rx: np.ndarray,
         n_blocks += pad_blocks
 
     last_valid_block_index = valid_blocks - 1
+    print(payload.shape)
 
     return payload, start_payload, end_payload, last_valid_block_index
 
@@ -132,7 +138,7 @@ def sync_chopper(payload, start_payload, end_payload, rx, block_length_time = ou
         y += 5*block_length_time
 
     for i in sync_peak_index:
-        start = i + block_length_time
+        start = i
         for _ in range(4):
             block = payload[start : start + block_length_time]
             if len(block) != block_length_time:
