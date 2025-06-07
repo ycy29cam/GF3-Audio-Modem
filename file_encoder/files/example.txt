@@ -1,0 +1,5 @@
+I would like to create a file encoder as a Jupyter notebook, broken down into stages. The encoder should take either a .txt, .wav or .tiff files, convert those files into binary. 
+
+The sequence begins with the file name, followed by \0 terminating string, followed by the file size, followed by another \0 terminating string, then finally followed by the actual file. The name, size and content should first be encoded using utf-8, which results in a series of bytes (in Python b''), then those bits should be converted into numbers (uint8), those uint8 bits can then be converted into binary.
+
+Provided in the file is the decoder, produce the encoder in stages, only up to binary and not after (until just before QPSK mapping).
