@@ -100,6 +100,170 @@ def start_end_synchronise(rx: np.ndarray,
     return payload, start_payload, end_payload, last_valid_block_index
 
 
+import numpy as np
+from typing import List
+
+import numpy as np
+from typing import List
+
+
+def extract_blocks(
+    sync_start: int,
+    sync_end: int,
+    rx_signal: np.ndarray,
+    window_size: int,
+    block_size: int,
+    total_blocks: int,
+    pilots: np.ndarray,
+) -> np.ndarray:
+    """Locate block boundaries in an OFDM‑based audio‑modem payload and
+    return a 3‑D array of blocks with cyclic prefix removed.
+
+    Notes
+    -----
+    * ``block_size`` **includes** the cyclic prefix (CP).
+    * The pilot templates supplied in *``pilots``* **exclude** the CP.  When
+      we correlate a CP‑free template against a CP‑bearing recording the
+      correlation peak appears *``cp_len``* samples *after* the true start of
+      the pilot block.  We therefore *subtract* that offset when converting
+      the peak position into an absolute index.
+
+    Parameters
+    ----------
+    sync_start : int
+        Sample index where the down‑chirp finishes – therefore the *start* of
+        the **first** pilot block (inclusive of its CP).
+    sync_end : int
+        Index where the up‑chirp (trailer) begins.  Used only to check that
+        subsequent slicing never overruns the capture.
+    rx_signal : np.ndarray
+        1‑D complex‑baseband capture **including** pre‑/post‑amble chirps.
+    window_size : int
+        Extra samples to extend either side of the half‑block search window
+        when locating pilots.
+    block_size : int
+        Length (samples) of every OFDM block *including* cyclic prefix.
+    total_blocks : int
+        Total number of payload blocks (pilots + data) between the chirps.
+        Must be a multiple of 5.
+    pilots : np.ndarray
+        Shape ``(n_groups, block_size − cp_len)`` – each row contains a time‑
+        domain pilot **without** its cyclic prefix.
+
+    Returns
+    -------
+    np.ndarray
+        Array with shape ``(n_groups, 5, block_size − cp_len)`` where
+        ``cp_len = block_size // 4``.
+    """
+
+    # ────────────────────────────────────────────────────────────────
+    # 0. Sanity checks and derived constants.
+    # ────────────────────────────────────────────────────────────────
+    if block_size <= 0 or window_size < 0:
+        raise ValueError("`block_size` must be > 0 and `window_size` ≥ 0.")
+
+    if total_blocks % 5 != 0:
+        raise ValueError("`total_blocks` must be a multiple of 5 (pilot + 4 data).")
+
+    cp_len = block_size // 4
+    n_groups = total_blocks // 5
+
+    # Pilot length may be shorter than block_size when CP is omitted.
+    pilot_len = pilots.shape[1]
+    cp_subtract = block_size - pilot_len  # expected to equal cp_len
+
+    if pilots.shape[0] != n_groups:
+        raise ValueError(
+            f"`pilots` must have {n_groups} rows (n_groups) but has {pilots.shape[0]}."
+        )
+
+    if cp_subtract < 0:
+        raise ValueError("`pilots` template longer than block_size – check arguments.")
+
+    half_block = block_size // 2
+    win_half_span = half_block + window_size  # half‑width of every search window
+
+    # Holds the absolute start index of each pilot (incl. CP).
+    pilot_starts: List[int] = []
+
+    # ────────────────────────────────────────────────────────────────
+    # 1. Locate every pilot via cross‑correlation inside a sliding window.
+    # ────────────────────────────────────────────────────────────────
+    for g in range(n_groups):
+        if g == 0:
+            # First group – window centred half a block after `sync_start`.
+            centre = sync_start + half_block
+        else:
+            # Subsequent groups – centre relative to the *previous* pilot.
+            centre = pilot_starts[g - 1] + 5 * block_size + half_block
+
+        win_start = max(0, centre - win_half_span)
+        win_end = min(len(rx_signal), centre + win_half_span)
+        window = rx_signal[win_start:win_end]
+
+        if len(window) < pilot_len:
+            raise RuntimeError(
+                f"Search window for group {g} too short (len={len(window)}) – increase `window_size`."
+            )
+
+        # Magnitude of cross‑correlation (valid part so the pilot fits entirely).
+        corr = np.abs(np.correlate(window, pilots[g].conj(), mode="valid"))
+        peak_offset = int(np.argmax(corr))
+
+        # Convert peak index → absolute pilot start (cp included).
+        pilot_start = win_start + peak_offset - cp_subtract
+        if pilot_start < 0:
+            raise RuntimeError(
+                f"Correlation peak for group {g} suggests negative index ({pilot_start}). Check parameters."
+            )
+        pilot_starts.append(pilot_start)
+
+    # ────────────────────────────────────────────────────────────────
+    # 2. Slice the recording into groups of 5 blocks using the pilot indices.
+    # ────────────────────────────────────────────────────────────────
+    groups_out: List[List[np.ndarray]] = []
+
+    for g in range(n_groups):
+        p_front = pilot_starts[g]
+        p_back = pilot_starts[g + 1] if g < n_groups - 1 else None
+
+        # 2.1 Pilot block itself.
+        pilot_blk = rx_signal[p_front : p_front + block_size]
+
+        # 2.2 First two data blocks – boundaries relative to *front* pilot.
+        d1_start = p_front + block_size
+        d2_start = d1_start + block_size
+        d1_blk = rx_signal[d1_start : d1_start + block_size]
+        d2_blk = rx_signal[d2_start : d2_start + block_size]
+
+        # 2.3 Last two data blocks – boundaries relative to *back* pilot if available.
+        if p_back is not None:
+            d4_start = p_back - block_size
+            d3_start = d4_start - block_size
+        else:
+            # Last group – slice contiguously after d2.
+            d3_start = d2_start + block_size
+            d4_start = d3_start + block_size
+
+        d3_blk = rx_signal[d3_start : d3_start + block_size]
+        d4_blk = rx_signal[d4_start : d4_start + block_size]
+
+        groups_out.append([pilot_blk, d1_blk, d2_blk, d3_blk, d4_blk])
+
+    # ────────────────────────────────────────────────────────────────
+    # 3. Remove cyclic prefix from every block and stack into a 3‑D array.
+    # ────────────────────────────────────────────────────────────────
+    def _strip_cp(b: np.ndarray) -> np.ndarray:
+        if len(b) < block_size:
+            raise RuntimeError("Block shorter than expected – slicing mis‑alignment.")
+        return b[cp_len:]
+
+    clean_groups = [[_strip_cp(b) for b in grp] for grp in groups_out]
+
+    return np.stack([np.stack(grp, axis=0) for grp in clean_groups], axis=0)
+
+"""
 def time_OFDM_chopper(payload, block_length_time = output["ofdm_block_len_with_cp"]):
     time_blocks = []
     print(len(payload)) 
@@ -111,6 +275,7 @@ def time_OFDM_chopper(payload, block_length_time = output["ofdm_block_len_with_c
         time_blocks.append(payload[i*block_length_time:(i+1)*block_length_time])
         time_blocks[-1] = time_blocks[-1][CP_LEN:]
     return np.array(time_blocks)
+"""
 
 # def sync_chopper(payload, start_payload, end_payload, rx, last_valid_block_index, block_length_time = output["ofdm_block_len_with_cp"]):
 #     time_blocks = []
@@ -334,7 +499,8 @@ if __name__ == "__main__":
     #------------------run reciever--------------------------------
     payload, start_payload, end_payload, last_valid_block_index  = start_end_synchronise(recording, chirp_up, chirp_down)
     # time_blocks = sync_chopper(payload ,start_payload, end_payload, recording,last_valid_block_index )
-    time_blocks = time_OFDM_chopper(payload)
+    D3_time_blocks = extract_blocks(start_payload, end_payload, recording, FFT_LEN / 2, FFT_LEN, last_valid_block_index, PILOT_TIME_NO_CP_NPY) # Check this
+    time_blocks = D3_time_blocks.reshape(-1, D3_time_blocks.shape[-1])
     useful_freq_blocks  = freq_domain(time_blocks)
     h_estimated_array = channel_estimation(useful_freq_blocks, np.load(PILOT_NPY), "zf")
     reconstructed_data = reconstruct_data_blocks(useful_freq_blocks, h_estimated_array)
