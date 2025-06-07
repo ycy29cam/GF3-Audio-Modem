@@ -114,7 +114,7 @@ def prepare_tx_sequence(plot = False) -> dict:
         time_pilot_blocks_no_CP.append(block_no_cp)
 
 
-    np.save(COLMAP_NPY, pilot_colours)
+    np.save(COLMAP_NPY, np.array(pilot_colours, dtype=object))
     np.save(PILOT_NPY, pilot_freq_symbols)
     np.save(PILOT_TIME_NO_CP_NPY, time_pilot_blocks_no_CP)
 

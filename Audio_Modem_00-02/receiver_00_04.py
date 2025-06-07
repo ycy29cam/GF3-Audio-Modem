@@ -52,33 +52,48 @@ def load_wav(path):
 # ------------------------------------------------
 #   3.  Synchronisation
 # ------------------------------------------------
-def start_end_synchronise(rx:np.ndarray,
-                chirp_up:np.ndarray,
-                chirp_down:np.ndarray) -> tuple[np.ndarray,int,int]: # colon tells you what type the function takes, and arrow tells you what the function returns
-    corr_up   = signal.correlate(rx, chirp_up,   mode='valid')
-    peak_up   = np.argmax(corr_up) 
+def start_end_synchronise(rx: np.ndarray,
+                chirp_up: np.ndarray,
+                chirp_down: np.ndarray) -> tuple[np.ndarray, int, int, int]:
+
+    corr_up   = signal.correlate(rx, chirp_up, mode='valid')
+    peak_up   = np.argmax(corr_up)
     corr_down = signal.correlate(rx, chirp_down, mode='valid')
+
     plt.plot(corr_up, label='up-chirp correlation')
     plt.plot(corr_down, label='down-chirp correlation')
-    plt.plot(rx*5000, label='received signal', alpha=0.5,)
-    search_from = peak_up + len(chirp_up) # search for down-chirp after up-chirp
-    peak_down = np.where(corr_down > 0.5*corr_down.max())[0] #formatting, 2D - 1D but no information loss
-    peak_down = peak_down[peak_down > search_from][0]
-    
+    plt.plot(rx * 5000, label='received signal', alpha=0.5)
+
+    search_from = peak_up + len(chirp_up)
+    peak_down_locs = np.where(corr_down > 0.5 * corr_down.max())[0]
+    peak_down = peak_down_locs[peak_down_locs > search_from][0]
 
     start_payload = peak_up + len(chirp_up)
-    end_payload   = peak_down 
+    end_payload   = peak_down
     print("start_payload:", start_payload, "end_payload:", end_payload)
+
     payload = rx[start_payload:end_payload]
-    exp = output["total_ofdm_length"]
-    if len(payload) < exp - LENGTH_TOL:
-        raise RuntimeError(f"payload {len(payload)} << expected {exp}")
-    elif len(payload) < exp:
-        payload = np.pad(payload, (0, exp-len(payload)))
+
+    block_len = 10240
+    n_blocks = int(round(len(payload) / 10240))
+    padded_len = n_blocks * block_len
+    print("unpadded vs padded difference is: ", abs(padded_len - len(payload)))
+    valid_blocks = n_blocks
+
+    if len(payload) < padded_len:
+        payload = np.pad(payload, (0, padded_len - len(payload)))
     else:
-        payload = payload[:exp]
-    # sf.write("chopped_payload_sound.wav", payload, FS)
-    return payload, start_payload, end_payload   
+        payload = payload[:padded_len]
+
+    if n_blocks % 5 != 0:
+        pad_blocks = 5 - (n_blocks % 5)
+        payload = np.pad(payload, (0, pad_blocks * block_len))
+        n_blocks += pad_blocks
+
+    last_valid_block_index = valid_blocks - 1
+
+    return payload, start_payload, end_payload, last_valid_block_index
+
 
 # def time_OFDM_chopper(payload, block_length_time = output["ofdm_block_len_with_cp"]):
 #     time_blocks = []
@@ -94,8 +109,8 @@ def start_end_synchronise(rx:np.ndarray,
 
 def sync_chopper(payload, start_payload, end_payload, rx, block_length_time = output["ofdm_block_len_with_cp"]):
     time_blocks = []
-    x = start_payload - block_length_time/2
-    y = start_payload + block_length_time*(3/2)
+    x = int(start_payload - block_length_time/2)
+    y = int(start_payload + block_length_time*(3/2))
     #replace with correct number of windows in a sec: 
     sync_peak_index = []
     sync_max = []
@@ -104,21 +119,26 @@ def sync_chopper(payload, start_payload, end_payload, rx, block_length_time = ou
         window = rx[x:y]
         pilot_correlation = signal.correlate(window, time_pilot_blocks_no_cp[i] )
         plt.plot(pilot_correlation)
+        plt.show()
         sync_start = x + np.argmax(pilot_correlation)
         sync_max.append(np.max(pilot_correlation))
         sync_peak_index.append(sync_start)
         chopped_start_index = start_payload + i * 5 * block_length_time
-        bit_diff = (sync_start - chopped_start_index) * (output["modulation_bits_per_sample"])
+        bit_diff = (sync_start - chopped_start_index)
         if abs(bit_diff) > 5:
             print(f" Desync on pilot block {i}: sync start index {sync_start}, expected {chopped_start_index}, diff = {bit_diff} bits")
             sync_peak_index[-1] = chopped_start_index
-        x += 4*block_length_time
-        y += 4*block_length_time
+        x += 5*block_length_time
+        y += 5*block_length_time
 
     for i in sync_peak_index:
         start = i + block_length_time
         for _ in range(4):
-            time_blocks.append(payload[start:start+ block_length_time])
+            block = payload[start : start + block_length_time]
+            if len(block) != block_length_time:
+                print(f"Skipping block at index {start} due to incorrect length: {len(block)}")
+                continue
+            time_blocks.append(block)
             start += block_length_time
     return np.array(time_blocks)
     
@@ -319,8 +339,8 @@ if __name__ == "__main__":
 
 
     #------------------run reciever--------------------------------
-    payload, start_payload, end_payload = start_end_synchronise(recording, chirp_up, chirp_down)
-    time_blocks = time_OFDM_chopper(payload)
+    payload, start_payload, end_payload, last_valid_block_index  = start_end_synchronise(recording, chirp_up, chirp_down)
+    time_blocks = sync_chopper(payload ,start_payload, end_payload, recording )
     useful_freq_blocks  = freq_domain(time_blocks)
     h_estimated_array = channel_estimation(useful_freq_blocks, np.load(PILOT_NPY), "zf")
     reconstructed_data = reconstruct_data_blocks(useful_freq_blocks, h_estimated_array)
