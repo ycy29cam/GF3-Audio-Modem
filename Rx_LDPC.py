@@ -36,6 +36,9 @@ LENGTH_TOL = tx.LENGTH_TOL
 LDPC_Z = 81
 LDPC_N = 24 * LDPC_Z
 LDPC_K = LDPC_N // 2
+LLR_MAX = 50.0
+PILOT_TIME_NO_CP_NPY = "time_pilot_blocks_no_cp.npy"
+
 
 # Instantiate the same “802.11n” LDPC code that you used in Tx:
 my_ldpc = ldpc_jossy.code(standard='802.11n', rate='1/2', z=LDPC_Z)
@@ -67,59 +70,100 @@ def load_wav(path):
 #   3.  Synchronisation
 # ------------------------------------------------
 def start_end_synchronise(rx: np.ndarray,
-                          chirp_up: np.ndarray,
-                          chirp_down: np.ndarray) -> tuple[
-    np.ndarray, int, int]:  # colon tells you what type the function takes, and arrow tells you what the function returns
-    corr_up = signal.correlate(rx, chirp_up, mode='valid')
-    peak_up = np.argmax(corr_up)
+                chirp_up: np.ndarray,
+                chirp_down: np.ndarray) -> tuple[np.ndarray, int, int, int]:
+
+    corr_up   = signal.correlate(rx, chirp_up, mode='valid')
+    peak_up   = np.argmax(corr_up)
     corr_down = signal.correlate(rx, chirp_down, mode='valid')
+
     plt.plot(corr_up, label='up-chirp correlation')
     plt.plot(corr_down, label='down-chirp correlation')
-    plt.plot(rx * 10000, label='received signal', alpha=0.5, )
-    search_from = peak_up + len(chirp_up)  # search for down-chirp after up-chirp
-    peak_down = np.where(corr_down > 0.5 * corr_down.max())[0]  # formatting, 2D - 1D but no information loss
-    peak_down = peak_down[peak_down > search_from][0]
+    plt.plot(rx * 5000, label='received signal', alpha=0.5)
+
+    search_from = peak_up + len(chirp_up)
+    peak_down_locs = np.where(corr_down > 0.5 * corr_down.max())[0]
+    peak_down = peak_down_locs[peak_down_locs > search_from][0]
 
     start_payload = peak_up + len(chirp_up)
-    end_payload = peak_down
+    end_payload   = peak_down
     print("start_payload:", start_payload, "end_payload:", end_payload)
-    payload = rx[start_payload:end_payload]
-    exp = output["total_ofdm_length"]
 
-# --------------------------------------        
-    if len(payload) < exp - LENGTH_TOL:
-        raise RuntimeError(f"payload {len(payload)} << expected {exp}")
-    elif len(payload) < exp:
-        payload = np.pad(payload, (0, exp - len(payload)))
+    payload = rx[start_payload:end_payload]
+
+    block_len = 10240
+    n_blocks = int(round(len(payload) / 10240))
+    padded_len = n_blocks * block_len
+    print("unpadded vs padded difference is: ", abs(padded_len - len(payload)))
+    valid_blocks = n_blocks
+
+    if len(payload) < padded_len:
+        payload = np.pad(payload, (0, padded_len - len(payload)))
     else:
-        payload = payload[:exp]
-    # sf.write("chopped_payload_sound.wav", payload, FS)
-    return payload, start_payload, end_payload
-# --------------------------------------        
-        
-    # If RuntimeError is occuring (because LENGTH_TOL is being exceeded) then this option is more reliable, as
-    # it simply zero-pads never throws an exception if len(payload) is “too short.” Instead, it just pads.
-    # if len(payload) < exp:
-    #     payload = np.pad(payload, (0, exp - len(payload)))
-    # elif len(payload) > exp:
-    #     payload = payload[:exp]
+        payload = payload[:padded_len]
+
+    if n_blocks % 5 != 0:
+        pad_blocks = 5 - (n_blocks % 5)
+        payload = np.pad(payload, (0, pad_blocks * block_len))
+        n_blocks += pad_blocks
+
+    last_valid_block_index = valid_blocks - 1
+
+    return payload, start_payload, end_payload, last_valid_block_index
 
 
 # ------------------------------------------------
 #   4.  OFDM helpers
 # ------------------------------------------------
 
-def time_OFDM_chopper(payload, block_length_time=output["ofdm_block_len_with_cp"]):
+#def time_OFDM_chopper(payload, block_length_time=output["ofdm_block_len_with_cp"]):
+#    time_blocks = []
+#    print(len(payload))
+#    print((output["no_of_payload_blocks"]))
+#    if len(payload) % block_length_time != 0:
+#        raise ValueError("Payload length is not a multiple of block length.")
+#    for i in range(len(payload) // block_length_time - 0):
+#        i = i  # allows for future non prefixed code at the beginning of the payload
+#        time_blocks.append(payload[i * block_length_time:(i + 1) * block_length_time])
+#        time_blocks[-1] = time_blocks[-1][CP_LEN:]
+#    return np.array(time_blocks)
+
+def sync_chopper(payload, start_payload, end_payload, rx, block_length_time = output["ofdm_block_len_with_cp"]):
     time_blocks = []
-    print(len(payload))
-    print((output["no_of_payload_blocks"]))
-    if len(payload) % block_length_time != 0:
-        raise ValueError("Payload length is not a multiple of block length.")
-    for i in range(len(payload) // block_length_time - 0):
-        i = i  # allows for future non prefixed code at the beginning of the payload
-        time_blocks.append(payload[i * block_length_time:(i + 1) * block_length_time])
-        time_blocks[-1] = time_blocks[-1][CP_LEN:]
+    x = int(start_payload - block_length_time/2)
+    y = int(start_payload + block_length_time*(3/2))
+    #replace with correct number of windows in a sec:
+    sync_peak_index = []
+    sync_max = []
+    time_pilot_blocks_no_cp = np.load(PILOT_TIME_NO_CP_NPY)
+    for i in range(5):
+        window = rx[x:y]
+        pilot_correlation = signal.correlate(window, time_pilot_blocks_no_cp[i] )
+        plt.plot(pilot_correlation)
+        plt.show()
+        sync_start = x + np.argmax(pilot_correlation)
+        sync_max.append(np.max(pilot_correlation))
+        sync_peak_index.append(sync_start)
+        chopped_start_index = start_payload + i * 5 * block_length_time
+        bit_diff = (sync_start - chopped_start_index)
+        if abs(bit_diff) > 5:
+            print(f" Desync on pilot block {i}: sync start index {sync_start}, expected {chopped_start_index}, diff = {bit_diff} bits")
+            sync_peak_index[-1] = chopped_start_index
+        x += 5*block_length_time
+        y += 5*block_length_time
+
+    for i in sync_peak_index:
+        start = i + block_length_time
+        for _ in range(4):
+            block = payload[start : start + block_length_time]
+            if len(block) != block_length_time:
+                print(f"Skipping block at index {start} due to incorrect length: {len(block)}")
+                continue
+            time_blocks.append(block)
+            start += block_length_time
     return np.array(time_blocks)
+
+
 
 
 def freq_domain(blocks_td: np.ndarray) -> np.ndarray:
@@ -131,7 +175,7 @@ def freq_domain(blocks_td: np.ndarray) -> np.ndarray:
 # ------------------------------------------------
 
 def channel_estimation(blocks: np.ndarray,
-                       pilot_symbol: np.ndarray,
+                       pilot_symbols: np.ndarray,
                        method: str = 'zf',
                        noise_var: float = 1e-4) -> np.ndarray:
     eps = 1e-12
@@ -140,7 +184,7 @@ def channel_estimation(blocks: np.ndarray,
     estimates = [None] * N
 
     def estimate_pilot_channel(freq_block: np.ndarray) -> np.ndarray:
-        return freq_block / (pilot_symbol + eps)
+        return freq_block / (pilot_symbols[i] + eps)
 
     # 1. fill in pilot estimates
     for i, t in enumerate(payload_type_list):
@@ -325,11 +369,16 @@ def plot_equalised_blocks(equalised_data_blocks: np.ndarray, sequenced_data_bloc
 
 if __name__ == "__main__":
     # 1) Optionally record in real time, or load a pre-existing file
-    # record_audio(480000)
-    SAMPLE_RATE, recording = read('rx_recording.wav')
+    #record_audio(480000)
+    #SAMPLE_RATE, recording = read('rx_recording.wav')
 
+    SAMPLE_RATE, recording = sf.read("tx_sequence.wav")
+
+    if recording.ndim > 1:
+        recording = recording.mean(axis=1)
+        
     # 2) Load TX waveform (for synchronisation)
-    SAMPLE_RATE, transmission = read("tx_sequence.wav")
+    SAMPLE_RATE, transmission = sf.read("tx_sequence.wav")
 
     #-----------------------------------------#
     ## NO MIC-SPEAKER TEST:
@@ -343,22 +392,23 @@ if __name__ == "__main__":
     chirp_down = generate_chirp(F1, F0, CHIRP_LEN_S)
 
     # 3) Synchronise and extract the OFDM payload
-    payload, start_payload, end_payload = start_end_synchronise(recording, chirp_up, chirp_down)
+    #payload, start_payload, end_payload = start_end_synchronise(recording, chirp_up, chirp_down)
+    payload, start_payload, end_payload, last_valid_block_index = start_end_synchronise(recording, chirp_up, chirp_down)
 
     # 4) Chop into time-domain OFDM blocks (remove CP)
-    time_blocks = time_OFDM_chopper(payload)
+    time_blocks = sync_chopper(payload, start_payload, end_payload, recording)
 
     # 5) FFT → get frequency-domain data for each block
     useful_freq_blocks = freq_domain(time_blocks)
 
     # 6) Channel estimation (pilot → H_est for each block)
-    pilot_symbols = np.load(PILOT_NPY)  # shape = (4095,)
-    h_estimated_array = channel_estimation(useful_freq_blocks, pilot_symbols, method="zf")
+    H_est_array = channel_estimation(useful_freq_blocks, np.load(PILOT_NPY), method='zf')
 
     # 7) Equalise & reconstruct data subcarriers
-    reconstructed_data = reconstruct_data_blocks(useful_freq_blocks, h_estimated_array)
+    reconstructed_data = reconstruct_data_blocks(useful_freq_blocks, H_est_array)
     # `reconstructed_data` has shape (N_data_blocks=TX_REPS, 4095)
 
+    """
     # ── Perfect I/Q normalization by dividing axes separately ──
     raw0 = reconstructed_data[0, :LDPC_N]  # first 1944 “data” symbols of OFDM block 0
     tx0 = output["payload_data_blocks"][0]  # Tx’s ideal QPSK symbols (each exactly ±1±1j)
@@ -389,6 +439,7 @@ if __name__ == "__main__":
             (reconstructed_data.real / (mean_rx_I + 1e-12))
             + 1j * (reconstructed_data.imag / (mean_rx_Q + 1e-12))
     )
+    """
 
     print("First‐block EQ symbols (first 8 of raw0, after normalization):")
     print(np.round(reconstructed_data[0, :8], 3))
@@ -396,7 +447,7 @@ if __name__ == "__main__":
     # 8) Plot one constellation for sanity (optional)
     plot_equalised_blocks(
         reconstructed_data[0][:LDPC_N],  # take only the first 1944 symbols
-        output["payload_data_blocks"][4]  # this is already length=1944
+        output["payload_data_blocks"][0]  # this is already length=1944
     )
         # after LDPC‐packing, each OFDM “data” block now has 4095 equalized QPSK symbols (including
         # the zero‐padding), whereas output["payload_data_blocks"][i] is only the first 1944 symbols
@@ -410,7 +461,6 @@ if __name__ == "__main__":
         b_q = 0 if sym.imag > 0 else 1
         return (1 - 2 * b_i) + 1j * (1 - 2 * b_q)
 
-
     residuals = []
     for blk in reconstructed_data:
         eq_symbols = blk[:LDPC_N]  # only first 1944 were actual data
@@ -420,16 +470,67 @@ if __name__ == "__main__":
     sigma2_est = np.mean(np.abs(residuals) ** 2)
     print(f"Estimated noise variance σ² = {sigma2_est:.3e}")
 
+
     # 10) LDPC decode: form LLRs, split into two codewords, decode each
     decoded_info_bits = []  # will hold (rec1, rec2) for each OFDM block
+
+    def qpsk_to_bits(sym_array):
+        # sym_array: 1D array of complex QPSK symbols
+        bI = (sym_array.real < 0).astype(int)  # 0 if ≥0, 1 if <0
+        bQ = (sym_array.imag < 0).astype(int)
+        # Now interleave I- and Q-bits into a single 1D array of length 2*N:
+        bits = np.zeros(2 * len(sym_array), dtype=int)
+        bits[0::2] = bI
+        bits[1::2] = bQ
+        return bits
+
+
     for blk_idx, blk_symbols in enumerate(reconstructed_data):
         eq_payload = blk_symbols[:LDPC_N]  # length = 1944
+
+        # Phase & amplitude normalisation
+        # a) Phase-derotate by aligning to the nearest QPSK corner
+        hard_ref = np.array([_qpsk_hard_decision(s) for s in eq_payload])
+        # Compute average phase offset between received and ideal symbols
+        phase_offset = np.angle(np.vdot(hard_ref, eq_payload))
+        eq_payload *= np.exp(-1j * phase_offset)
+
+        # b) Amplitude-normalise to unit average power
+        avg_power = np.mean(np.abs(eq_payload) ** 2)
+        eq_payload /= np.sqrt(avg_power + 1e-12)
+
+        # ——— PRE-LDPC BER ———
+        # hard-decide each QPSK symbol back to {0,1} bits
+        hard_pts = np.array([_qpsk_hard_decision(s) for s in eq_payload])
+        hard_bits = np.zeros(2 * LDPC_N, dtype=int)
+        hard_bits[0::2] = (hard_pts.real < 0).astype(int)  # I-bit
+        hard_bits[1::2] = (hard_pts.imag < 0).astype(int)  # Q-bit
+
+        # Recover the transmitted codeword bits by inverting the QPSK map:
+        tx_bits = qpsk_to_bits(output["payload_data_blocks"][blk_idx])  # your transmitted coded-bit array
+        pre_err = np.sum(hard_bits != tx_bits)
+        pre_ber = pre_err / float(len(tx_bits))
+        print(f"[blk {blk_idx}] PRE-LDPC: {pre_err}/{len(tx_bits)} errors → BER={pre_ber:.2e}")
 
         # Build LLR vector length=2×1944 = 3888
         llr = np.zeros(2 * LDPC_N, dtype=np.float32)
         for j, sym in enumerate(eq_payload):
             llr[2 * j] = (2.0 / sigma2_est) * sym.real
             llr[2 * j + 1] = (2.0 / sigma2_est) * sym.imag
+
+        # FIX: flip all LLR signs because we saw they’re inverted
+        llr = -llr
+
+        # DIAGNOSTIC: check first 10 LLR entries against the true coded bits
+        tx_coded = qpsk_to_bits(output["payload_data_blocks"][blk_idx])
+        print(f"LLR sign check for block {blk_idx}, first 10 bits:")
+
+        for bit_idx in range(10):
+            true_b = tx_coded[bit_idx]
+            print(f"  idx {bit_idx:2d}: true={true_b}  LLR={llr[bit_idx]:+.3f}")
+
+        # Clamp every LLR into [–LLR_MAX, +LLR_MAX]
+        llr = np.clip(llr, -LLR_MAX, +LLR_MAX)
 
         # Split into two chunks of length=1944 each
         llr_cw1 = llr[:LDPC_N]
@@ -439,19 +540,36 @@ if __name__ == "__main__":
         soft1, iters1 = my_ldpc.decode(llr_cw1)  # soft1 is length=972
         hard1 = (soft1 > 0).astype(np.int8)  # threshold at 0 → 0/1 bits
 
-        print("llr_cw2.shape  =", llr_cw2.shape)  # Should be exactly (1944,)
-        print("LDPC_N        =", LDPC_N)  # Should print 1944
-        print("any NaN in llr_cw2? ", np.isnan(llr_cw2).any())
-        print("any Inf in llr_cw2? ", np.isinf(llr_cw2).any())
-        print("llr_cw2 min/max:", np.nanmin(llr_cw2), np.nanmax(llr_cw2))
+        #print("llr_cw2.shape  =", llr_cw2.shape)  # Should be exactly (1944,)
+        #print("LDPC_N        =", LDPC_N)  # Should print 1944
+        #print("any NaN in llr_cw2? ", np.isnan(llr_cw2).any())
+        #print("any Inf in llr_cw2? ", np.isinf(llr_cw2).any())
+        #print("llr_cw2 min/max:", np.nanmin(llr_cw2), np.nanmax(llr_cw2))
 
         soft2, iters2 = my_ldpc.decode(llr_cw2)
         hard2 = (soft2 > 0).astype(np.int8)
         decoded_info_bits.append((hard1, hard2))
 
-        #rec1 = my_ldpc.decode(llr_cw1)  # returns array of length=972 (info bits)
-        #rec2 = my_ldpc.decode(llr_cw2)  # same
-        #decoded_info_bits.append((rec1, rec2))
+        # ——— POST-LDPC BER ———
+
+        # 1) Extract info bits from each decoded codeword (systematic code)
+        rec_info1 = hard1[:LDPC_K]
+        rec_info2 = hard2[:LDPC_K]
+
+        # 2) Recover the original info bits for this block
+        # (either from output["payload_info_bits"] or by slicing the same PRNG stream)
+        tx_two_info = output["payload_info_bits"][blk_idx]  # should be shape (2*LDPC_K,)
+        tx_info1 = tx_two_info[0:LDPC_K]
+        tx_info2 = tx_two_info[LDPC_K:2 * LDPC_K]
+
+        # 3) Compute per-codeword BER
+        err1 = np.sum(rec_info1 != tx_info1)
+        err2 = np.sum(rec_info2 != tx_info2)
+        ber1 = err1 / float(LDPC_K)
+        ber2 = err2 / float(LDPC_K)
+        print(f"[blk {blk_idx}] POST-LDPC CW1: {err1}/{LDPC_K} errors → BER={ber1:.2e}")
+        print(f"[blk {blk_idx}] POST-LDPC CW2: {err2}/{LDPC_K} errors → BER={ber2:.2e}")
+
 
     # 11) Print out first few recovered bits of the first block for verification
     first_rec1, first_rec2 = decoded_info_bits[0]
