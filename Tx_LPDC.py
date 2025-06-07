@@ -192,6 +192,7 @@ def prepare_tx_sequence(plot=False) -> dict:
         payload_type.append('pilot')
 
         time_pilot_blocks_no_cp.append(pilot_td)
+        pilot_freq_symbols.append(pilot_bits)
 
         # 2) Append the 4 data blocks for this rep
         base = rep * 4
