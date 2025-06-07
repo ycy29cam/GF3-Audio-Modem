@@ -52,7 +52,7 @@ def start_end_synchronise(rx: np.ndarray,
 
 
     search_from = peak_up + len(chirp_up)
-    peak_down_locs = np.where(corr_down > 0.5 * corr_down.max())[0]
+    peak_down_locs = np.where(corr_down > 0.2 * corr_down.max())[0]
     peak_down = peak_down_locs[peak_down_locs > search_from][0]
 
     start_payload = peak_up + len(chirp_up)
@@ -95,6 +95,8 @@ def sync_chopper(payload, start_payload, end_payload, rx, last_valid_block_index
     for i in range(last_valid_block_index//5):
         window = rx[x:y]
         pilot_correlation = signal.correlate(window, time_pilot_blocks_no_cp[i] )
+        plt.plot(pilot_correlation)
+        plt.show()
         sync_start = x + np.argmax(pilot_correlation) - FFT_LEN
         sync_max.append(np.max(pilot_correlation))
         sync_peak_index.append(sync_start)
@@ -114,6 +116,20 @@ def sync_chopper(payload, start_payload, end_payload, rx, last_valid_block_index
             time_blocks.append(block)
             print(start)
             start += block_length_time
+    return np.array(time_blocks)
+
+def time_OFDM_chopper(payload, block_length_time = output["ofdm_block_len_with_cp"], cp_len=CP_LEN):
+    time_blocks = []
+    if len(payload) % block_length_time != 0:
+        num_blocks = len(payload) // block_length_time
+        payload = payload[:num_blocks * block_length_time]
+        print(f"Payload trimmed to {len(payload)} samples to fit {num_blocks} blocks.")
+
+    num_blocks = len(payload) // block_length_time
+    for i in range(num_blocks):
+        block_with_cp = payload[i * block_length_time : (i + 1) * block_length_time]
+        block_no_cp = block_with_cp[cp_len:]
+        time_blocks.append(block_no_cp)
     return np.array(time_blocks)
 
 def freq_domain(blocks_td:np.ndarray) -> np.ndarray:
@@ -271,18 +287,20 @@ def plot_equalised_blocks(equalised_data_blocks: np.ndarray, sequenced_data_bloc
 
 
 if __name__ == "__main__":
-
-    recording = output["waveform"]
+    # record_audio(960000)
+    SAMPLE_RATE, recording = read('rx_recording.wav')
+    # recording = output["waveform"]
     chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
     chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
 
     payload, start_payload, end_payload, last_valid_block_index  = start_end_synchronise(recording, chirp_up, chirp_down)
     time_blocks = sync_chopper(payload ,start_payload, end_payload, recording,last_valid_block_index )
+    # time_blocks = time_OFDM_chopper(payload)
     useful_freq_blocks  = freq_domain(time_blocks)
     h_estimated_array = channel_estimation(useful_freq_blocks, np.load(PILOT_NPY), "zf")
     reconstructed_data = reconstruct_data_blocks(useful_freq_blocks, h_estimated_array)
 
-    plot_equalised_blocks(reconstructed_data[1], output["payload_data_blocks"][1])
+    plot_equalised_blocks(reconstructed_data[8], output["payload_data_blocks"][8])
 
     print(len(recording))
     print ("transmitted signal: ", payload,"start bin: ", start_payload, "end bin: ", end_payload)
