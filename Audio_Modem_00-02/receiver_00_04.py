@@ -124,8 +124,8 @@ def sync_chopper(payload, start_payload, end_payload, rx, last_valid_block_index
     for i in range(last_valid_block_index//5):
         window = rx[x:y]
         pilot_correlation = signal.correlate(window, time_pilot_blocks_no_cp[i] )
-        plt.plot(pilot_correlation)
-        plt.show()
+        # plt.plot(pilot_correlation)
+        # plt.show()
         sync_start = x + np.argmax(pilot_correlation) - FFT_LEN
         sync_max.append(np.max(pilot_correlation))
         sync_peak_index.append(sync_start)
@@ -331,8 +331,8 @@ if __name__ == "__main__":
 
     #------------------import sound file--------------------------------
     # record_audio(480000)
-    SAMPLE_RATE, recording = read('rx_recording.wav')
-    # recording = output["waveform"] # works flawlessly, which tells me i'm doing the theory correctly, i'm just missing correction details
+    # SAMPLE_RATE, recording = read('rx_recording.wav')
+    recording = output["waveform"] # works flawlessly, which tells me i'm doing the theory correctly, i'm just missing correction details
     # SAMPLE_RATE, transmission = read("tx_sequence.wav")
     chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
     chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
