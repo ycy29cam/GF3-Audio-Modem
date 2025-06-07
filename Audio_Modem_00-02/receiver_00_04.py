@@ -90,13 +90,13 @@ def start_end_synchronise(rx: np.ndarray,
     else:
         payload = payload[:padded_len]
 
-    if n_blocks % 5 != 0:
-        pad_blocks = 5 - (n_blocks % 5)
-        payload = np.pad(payload, (0, pad_blocks * block_len))
-        n_blocks += pad_blocks
+    # if n_blocks % 5 != 0:
+    #     pad_blocks = 5 - (n_blocks % 5)
+    #     payload = np.pad(payload, (0, pad_blocks * block_len))
+    #     n_blocks += pad_blocks
 
-    last_valid_block_index = valid_blocks - 1
-    print(payload.shape)
+    last_valid_block_index = valid_blocks
+    # print(payload.shape)
 
     return payload, start_payload, end_payload, last_valid_block_index
 
@@ -113,23 +113,23 @@ def start_end_synchronise(rx: np.ndarray,
 #         time_blocks[-1] = time_blocks[-1][CP_LEN:]
 #     return np.array(time_blocks)
 
-def sync_chopper(payload, start_payload, end_payload, rx, block_length_time = output["ofdm_block_len_with_cp"]):
+def sync_chopper(payload, start_payload, end_payload, rx, last_valid_block_index, block_length_time = output["ofdm_block_len_with_cp"]):
     time_blocks = []
     x = int(start_payload - block_length_time/2)
     y = int(start_payload + block_length_time*(3/2))
-    #replace with correct number of windows in a sec: 
     sync_peak_index = []
     sync_max = []
     time_pilot_blocks_no_cp = np.load(PILOT_TIME_NO_CP_NPY)
-    for i in range(5):
+    print("the last valid block index is: ", last_valid_block_index)
+    for i in range(last_valid_block_index//5):
         window = rx[x:y]
         pilot_correlation = signal.correlate(window, time_pilot_blocks_no_cp[i] )
         plt.plot(pilot_correlation)
         plt.show()
-        sync_start = x + np.argmax(pilot_correlation)
+        sync_start = x + np.argmax(pilot_correlation) - FFT_LEN
         sync_max.append(np.max(pilot_correlation))
         sync_peak_index.append(sync_start)
-        chopped_start_index = start_payload + i * 5 * block_length_time
+        chopped_start_index = start_payload + i * 5 * block_length_time + CP_LEN
         bit_diff = (sync_start - chopped_start_index)
         if abs(bit_diff) > 5:
             print(f" Desync on pilot block {i}: sync start index {sync_start}, expected {chopped_start_index}, diff = {bit_diff} bits")
@@ -139,20 +139,14 @@ def sync_chopper(payload, start_payload, end_payload, rx, block_length_time = ou
 
     for i in sync_peak_index:
         start = i
-        for _ in range(4):
-            block = payload[start : start + block_length_time]
-            if len(block) != block_length_time:
-                print(f"Skipping block at index {start} due to incorrect length: {len(block)}")
-                continue
+        for _ in range(5):
+            block = rx[start : start + FFT_LEN]
+            print("time block length is: ", len(block))
             time_blocks.append(block)
+            print(start)
             start += block_length_time
-    return np.array(time_blocks)
+    return np.array(time_blocks) 
     
-    
-
-    
-
-
 
 
 
@@ -346,13 +340,13 @@ if __name__ == "__main__":
 
     #------------------run reciever--------------------------------
     payload, start_payload, end_payload, last_valid_block_index  = start_end_synchronise(recording, chirp_up, chirp_down)
-    time_blocks = sync_chopper(payload ,start_payload, end_payload, recording )
+    time_blocks = sync_chopper(payload ,start_payload, end_payload, recording,last_valid_block_index )
     useful_freq_blocks  = freq_domain(time_blocks)
     h_estimated_array = channel_estimation(useful_freq_blocks, np.load(PILOT_NPY), "zf")
     reconstructed_data = reconstruct_data_blocks(useful_freq_blocks, h_estimated_array)
     #when we eventually work with unknown data blocks, we would then need to do maximum likelihood estimation to find the most likely data blocks from the reconstructed data blocks
     #for now we will just plot the equalised blocks and see how they look qualitatively
-    plot_equalised_blocks(reconstructed_data[8], output["payload_data_blocks"][8])
+    plot_equalised_blocks(reconstructed_data[1], output["payload_data_blocks"][1])
 
 
 
