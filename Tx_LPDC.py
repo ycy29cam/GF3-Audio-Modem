@@ -182,7 +182,7 @@ def prepare_tx_sequence(plot=False) -> dict:
     payload = []  # no CP
     payload_type = []
     time_pilot_blocks_no_cp = []
-    pilot_freq_symbols_ = []
+    pilot_freq_symbols = []
 
     for rep in range(TX_REPS):
         # 1) Regenerate a fresh pilot for this rep
