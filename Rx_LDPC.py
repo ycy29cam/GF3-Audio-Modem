@@ -128,42 +128,54 @@ def start_end_synchronise(rx: np.ndarray,
 #        time_blocks[-1] = time_blocks[-1][CP_LEN:]
 #    return np.array(time_blocks)
 
-def sync_chopper(payload, start_payload, end_payload, rx, block_length_time = output["ofdm_block_len_with_cp"]):
-    time_blocks = []
+def sync_chopper(payload, start_payload, end_payload, rx,
+                 block_length_time=output["ofdm_block_len_with_cp"]):
+    """
+    Returns:
+      pilot_td_blocks: array shape (TX_REPS, FFT_LEN) — CP-stripped pilot symbols
+      data_td_blocks:  array shape (TX_REPS*4, FFT_LEN) — CP-stripped data symbols
+    """
+    # Preallocate lists
+    pilot_blocks = []
+    data_blocks  = []
+
+    # Load the time-domain pilot waveforms (no CP) you saved in Tx
+    time_pilot_blocks_no_cp = np.load(PILOT_TIME_NO_CP_NPY, allow_pickle=True)
+
+    # Window initial bounds: half a block before payload start, 1.5 blocks after
     x = int(start_payload - block_length_time/2)
-    y = int(start_payload + block_length_time*(3/2))
-    #replace with correct number of windows in a sec:
-    sync_peak_index = []
-    sync_max = []
-    time_pilot_blocks_no_cp = np.load(PILOT_TIME_NO_CP_NPY)
-    for i in range(5):
-        window = rx[x:y]
-        pilot_correlation = signal.correlate(window, time_pilot_blocks_no_cp[i] )
-        plt.plot(pilot_correlation)
-        plt.show()
-        sync_start = x + np.argmax(pilot_correlation)
-        sync_max.append(np.max(pilot_correlation))
-        sync_peak_index.append(sync_start)
-        chopped_start_index = start_payload + i * 5 * block_length_time
-        bit_diff = (sync_start - chopped_start_index)
-        if abs(bit_diff) > 5:
-            print(f" Desync on pilot block {i}: sync start index {sync_start}, expected {chopped_start_index}, diff = {bit_diff} bits")
-            sync_peak_index[-1] = chopped_start_index
-        x += 5*block_length_time
-        y += 5*block_length_time
+    y = int(start_payload + block_length_time * 1.5)
 
-    for i in sync_peak_index:
-        start = i + block_length_time
+    for i in range(TX_REPS):
+        # Correlate to find exact pilot start
+        window     = rx[x:y]
+        pilot_td   = time_pilot_blocks_no_cp[i]
+        corr       = signal.correlate(window, pilot_td, mode="valid")
+        sync_start = x + np.argmax(corr)
+
+        expected = start_payload + i * 5 * block_length_time
+        if abs(sync_start - expected) > LENGTH_TOL:
+            print(f" Desync on pilot {i}: got {sync_start}, expected {expected}")
+            sync_start = expected
+
+        # 1) Extract CP-stripped pilot
+        p0 = sync_start + CP_LEN
+        pilot_blocks.append(rx[p0 : p0 + FFT_LEN])
+
+        # 2) Extract the 4 data blocks right after that
+        d0 = p0 + FFT_LEN
         for _ in range(4):
-            block = payload[start : start + block_length_time]
-            if len(block) != block_length_time:
-                print(f"Skipping block at index {start} due to incorrect length: {len(block)}")
-                continue
-            time_blocks.append(block)
-            start += block_length_time
-    return np.array(time_blocks)
+            data_blocks.append(rx[d0 : d0 + FFT_LEN])
+            d0 += FFT_LEN
 
+        # Advance the search window for next rep
+        x += 5 * block_length_time
+        y += 5 * block_length_time
 
+    # Convert to numpy arrays
+    pilot_td_blocks = np.stack(pilot_blocks)  # shape = (TX_REPS, FFT_LEN)
+    data_td_blocks  = np.stack(data_blocks)   # shape = (TX_REPS*4, FFT_LEN)
+    return pilot_td_blocks, data_td_blocks
 
 
 def freq_domain(blocks_td: np.ndarray) -> np.ndarray:
@@ -174,6 +186,7 @@ def freq_domain(blocks_td: np.ndarray) -> np.ndarray:
 #   5.  Channel estimation
 # ------------------------------------------------
 
+"""
 def channel_estimation(blocks: np.ndarray,
                        pilot_symbols: np.ndarray,
                        method: str = 'zf',
@@ -208,6 +221,25 @@ def channel_estimation(blocks: np.ndarray,
     H_est = np.stack(estimates, axis=0)
     np.save(CHAN_NPY, H_est)
     return H_est
+"""
+
+def channel_estimation(pilot_blocks: np.ndarray,
+                       pilot_symbols: np.ndarray,
+                       method: str = 'zf') -> np.ndarray:
+    """
+    Zero-forcing channel estimate on exactly the pilot OFDM symbols.
+    pilot_blocks   : (TX_REPS, N_subcarriers) freq-domain received pilots
+    pilot_symbols  : (TX_REPS, N_subcarriers) known TX pilot symbols
+    returns H_pilots: same shape, each H_pilots[i] = pilot_blocks[i]/pilot_symbols[i]
+    """
+    eps = 1e-12
+    assert pilot_blocks.shape == pilot_symbols.shape, \
+        f"pilot_blocks {pilot_blocks.shape} vs pilot_symbols {pilot_symbols.shape}"
+
+    # Elementwise division → one H-estimate per pilot
+    H_pilots = pilot_blocks / (pilot_symbols + eps)
+    np.save(CHAN_NPY, H_pilots)
+    return H_pilots
 
 
 def reconstruct_data_blocks(useful_frequency_blocks, H_est_array):
@@ -315,11 +347,18 @@ def plot_equalised_blocks(equalised_data_blocks: np.ndarray, sequenced_data_bloc
         equalised_data_blocks (np.ndarray): Equalised data blocks (N_blocks, N_subcarriers)
         tx_blocks (np.ndarray): Corresponding TX data symbols (ideal, same shape)
     """
+
+    equalised_data_blocks = np.array(equalised_data_blocks, dtype=np.complex64)
+    sequenced_data_blocks = np.array(sequenced_data_blocks,  dtype=np.complex64)
+
     assert equalised_data_blocks.shape == sequenced_data_blocks.shape, "Shape mismatch between TX and RX blocks"
+
+    #eq = np.array(equalised_data_blocks, dtype=np.complex64)
 
     # Flatten both
     eq_flat = equalised_data_blocks.ravel()
     tx_flat = sequenced_data_blocks.ravel()
+
 
     # Rebuild colour map based on TX ideal symbols
     # Reverse map: symbol -> colour
@@ -372,13 +411,12 @@ if __name__ == "__main__":
     #record_audio(480000)
     #SAMPLE_RATE, recording = read('rx_recording.wav')
 
-    SAMPLE_RATE, recording = sf.read("tx_sequence.wav")
-
+    recording, SAMPLE_RATE = sf.read("tx_sequence.wav")
     if recording.ndim > 1:
         recording = recording.mean(axis=1)
-        
+
     # 2) Load TX waveform (for synchronisation)
-    SAMPLE_RATE, transmission = sf.read("tx_sequence.wav")
+    #SAMPLE_RATE, transmission = sf.read("tx_sequence.wav")
 
     #-----------------------------------------#
     ## NO MIC-SPEAKER TEST:
@@ -396,17 +434,24 @@ if __name__ == "__main__":
     payload, start_payload, end_payload, last_valid_block_index = start_end_synchronise(recording, chirp_up, chirp_down)
 
     # 4) Chop into time-domain OFDM blocks (remove CP)
-    time_blocks = sync_chopper(payload, start_payload, end_payload, recording)
+    #time_blocks = sync_chopper(payload, start_payload, end_payload, recording)
+    pilot_td_blocks, data_td_blocks = sync_chopper(payload, start_payload, end_payload, recording)
 
     # 5) FFT → get frequency-domain data for each block
-    useful_freq_blocks = freq_domain(time_blocks)
+    #useful_freq_blocks = freq_domain(time_blocks)
+    pilot_freq_blocks = freq_domain(pilot_td_blocks)
+    data_freq_blocks = freq_domain(data_td_blocks)
 
     # 6) Channel estimation (pilot → H_est for each block)
-    H_est_array = channel_estimation(useful_freq_blocks, np.load(PILOT_NPY), method='zf')
+    #pilot_blocks = useful_freq_blocks[0:: 5]
+    #data_blocks = useful_freq_blocks[1:: 5]  # then feed data into your data path
+
+    pilot_symbols = np.load(PILOT_NPY, allow_pickle=True)
+    H_pilots = channel_estimation(pilot_freq_blocks, pilot_symbols, method='zf')
 
     # 7) Equalise & reconstruct data subcarriers
-    reconstructed_data = reconstruct_data_blocks(useful_freq_blocks, H_est_array)
-    # `reconstructed_data` has shape (N_data_blocks=TX_REPS, 4095)
+    H_data = np.repeat(H_pilots, 4, axis=0)
+    reconstructed_data = data_freq_blocks / H_data
 
     """
     # ── Perfect I/Q normalization by dividing axes separately ──
@@ -442,7 +487,10 @@ if __name__ == "__main__":
     """
 
     print("First‐block EQ symbols (first 8 of raw0, after normalization):")
-    print(np.round(reconstructed_data[0, :8], 3))
+    #print(np.round(reconstructed_data[0, :8], 3))
+    first8 = reconstructed_data[0, :8]
+    rounded = [complex(round(x.real, 3), round(x.imag, 3)) for x in first8]
+    print(rounded)
 
     # 8) Plot one constellation for sanity (optional)
     plot_equalised_blocks(
