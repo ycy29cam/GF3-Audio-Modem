@@ -163,10 +163,12 @@ def sync_chopper(payload, last_valid_block_index, block_length_time = output["of
     for i in range(num_blocks):
         block_with_cp = final_payload[i * final_block_len : (i + 1) * final_block_len]
         
-        # Ensure the block is long enough to have a cyclic prefix to remove
         if len(block_with_cp) > final_cp_len:
             block_no_cp = block_with_cp[final_cp_len:]
-            time_blocks.append(block_no_cp)
+
+            # CRITICAL FIX: Resample the chopped block to the exact FFT length
+            block_for_fft = signal.resample(block_no_cp, FFT_LEN)
+            time_blocks.append(block_for_fft)
             
     return np.array(time_blocks)
 
@@ -339,20 +341,20 @@ def plot_equalised_blocks(equalised_data_blocks: np.ndarray, sequenced_data_bloc
 
 
 if __name__ == "__main__":
-    record_audio(600000)
+    # record_audio(600000)
     SAMPLE_RATE, recording = read('rx_recording.wav')
     # recording = output["waveform"]
     chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
     chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
 
     payload, start_payload, end_payload, last_valid_block_index  = start_end_synchronise(recording, chirp_up, chirp_down)
-    # time_blocks = sync_chopper(payload, last_valid_block_index )
-    time_blocks = time_OFDM_chopper(payload)
+    time_blocks = sync_chopper(payload, last_valid_block_index )
+    # time_blocks = time_OFDM_chopper(payload)
     useful_freq_blocks  = freq_domain(time_blocks)
     h_estimated_array = channel_estimation(useful_freq_blocks, np.load(PILOT_NPY), "zf")
     reconstructed_data = reconstruct_data_blocks(useful_freq_blocks, h_estimated_array)
 
-    plot_equalised_blocks(reconstructed_data[0], output["payload_data_blocks"][0])
+    plot_equalised_blocks(reconstructed_data[5], output["payload_data_blocks"][5])
 
     print(len(recording))
     print ("transmitted signal: ", payload,"start bin: ", start_payload, "end bin: ", end_payload)
