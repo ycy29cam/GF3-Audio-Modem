@@ -238,6 +238,71 @@ def reconstruct_data_blocks(useful_frequency_blocks, H_est_array):
     decoded_datablocks = data_blocks/data_H_est_array
     return decoded_datablocks
 
+def phase_error_correction(equalised_blocks, pilot_symbols, payload_type_list):
+    """
+    Corrects phase error and returns ONLY the corrected data blocks.
+
+    This function identifies pilot blocks, calculates the average phase offset
+    for each one, and interpolates these phase errors to correct all blocks.
+    Finally, it filters out the pilot blocks and returns only the clean,
+    corrected data blocks.
+
+    Args:
+        equalised_blocks (np.ndarray): All blocks (pilots and data) after
+                                     frequency-domain equalization.
+        pilot_symbols (np.ndarray): The known, ideal pilot symbols.
+        payload_type_list (list): A list of strings ('pilot' or 'data')
+                                  indicating the type of each block.
+
+    Returns:
+        np.ndarray: A new array containing ONLY the phase-corrected DATA blocks.
+    """
+    # 1. Find the indices of pilot blocks to use as a reference
+    pilot_indices = [i for i, block_type in enumerate(payload_type_list) if block_type == 'pilot']
+    pilot_indices = [i for i in pilot_indices if i < len(equalised_blocks)]
+
+    if not pilot_indices:
+        print("Warning: No pilot blocks found. Cannot perform phase correction.")
+        return np.array([]) # Return an empty array as no data can be processed
+
+    # 2. Measure the average phase error for each pilot block
+    measured_phase_errors = []
+    tx_pilot_counter = 0
+    for rx_pilot_index in pilot_indices:
+        if tx_pilot_counter < len(pilot_symbols):
+            rx_pilot_block = equalised_blocks[rx_pilot_index]
+            tx_pilot_block = pilot_symbols[tx_pilot_counter]
+            
+            error_vector_sum = np.sum(tx_pilot_block * np.conj(rx_pilot_block))
+            avg_phase_error = np.angle(error_vector_sum)
+            measured_phase_errors.append(avg_phase_error)
+            tx_pilot_counter += 1
+
+    if not measured_phase_errors:
+        print("Warning: Could not measure phase error. Cannot perform phase correction.")
+        return np.array([])
+
+    # 3. Interpolate the measured errors across all block positions
+    all_block_indices = np.arange(len(equalised_blocks))
+    interpolated_phase_errors = np.interp(
+        x=all_block_indices,
+        xp=pilot_indices,
+        fp=measured_phase_errors
+    )
+    
+    # 4. Apply the phase correction to ALL blocks (pilots and data)
+    phase_corrected_all_blocks = np.array([
+        block * np.exp(1j * error) for block, error in zip(equalised_blocks, interpolated_phase_errors)
+    ])
+
+    # 5. Filter and return ONLY the data blocks, discarding the pilots
+    corrected_data_blocks = np.array([
+        phase_corrected_all_blocks[i] for i, btype in enumerate(payload_type_list)
+        if btype == 'data' and i < len(phase_corrected_all_blocks)
+    ])
+    
+    return corrected_data_blocks
+
 def equalise(rx_fd, H):
     return rx_fd / H
 
@@ -340,6 +405,66 @@ def plot_equalised_blocks(equalised_data_blocks: np.ndarray, sequenced_data_bloc
     plt.gca().set_aspect('equal'); plt.tight_layout(); plt.show()
 
 
+def calculate_and_plot_ber(received_symbols, transmitted_symbols):
+    """
+    Calculates and plots the pre-LDPC Bit Error Rate.
+    
+    Args:
+        received_symbols (np.ndarray): The final, corrected data symbols.
+        transmitted_symbols (np.ndarray): The ideal transmitted data symbols.
+    """
+    # Define the mapping from an ideal symbol's coordinates back to bits
+    sym_to_bits_map = { (1,1):(0,0), (1,-1):(0,1), (-1,-1):(1,1), (-1,1):(1,0) }
+    
+    # Flatten arrays for processing
+    rx_flat = received_symbols.ravel()
+    tx_flat = transmitted_symbols.ravel()
+    
+    # --- Hard Decision Demodulation of Received Symbols ---
+    # Decide the symbol based on the quadrant the point is in
+    detected_real = np.sign(rx_flat.real)
+    detected_imag = np.sign(rx_flat.imag)
+    detected_real[detected_real == 0] = 1 # Avoids (0,0) case
+    detected_imag[detected_imag == 0] = 1
+    decided_symbols_coords = zip(detected_real, detected_imag)
+
+    # --- Convert Symbols to Bits ---
+    rx_bits = np.array([bit for coords in decided_symbols_coords for bit in sym_to_bits_map.get(coords, (0,0))])
+    tx_bits = np.array([bit for sym in tx_flat for bit in sym_to_bits_map.get((sym.real, sym.imag), (0,0))])
+
+    # --- Compare and Calculate BER ---
+    min_len = min(len(rx_bits), len(tx_bits))
+    if min_len == 0:
+        print("No bits to compare for BER.")
+        return
+        
+    rx_bits = rx_bits[:min_len]
+    tx_bits = tx_bits[:min_len]
+
+    num_errors = np.sum(rx_bits != tx_bits)
+    total_bits = len(tx_bits)
+    ber = num_errors / total_bits
+    
+    print(f"\n--- Bit Error Rate (BER) ---")
+    print(f"Total Bits Compared: {total_bits}")
+    print(f"Number of Bit Errors: {num_errors}")
+    print(f"Pre-LDPC BER: {ber:.2e}")
+
+    # --- Plot Error Locations ---
+    plt.figure(figsize=(12, 4))
+    bit_errors = (rx_bits != tx_bits)
+    error_indices = np.where(bit_errors)[0]
+    plt.stem(error_indices, np.ones_like(error_indices), linefmt='r-', markerfmt='rx', basefmt=' ')
+    plt.title('Bit Error Locations')
+    plt.xlabel('Bit Index')
+    plt.ylabel('Error')
+    plt.xlim(0, total_bits)
+    plt.yticks([])
+    plt.grid(True, axis='x')
+    plt.tight_layout()
+    plt.show()
+
+
 if __name__ == "__main__":
     # record_audio(600000)
     SAMPLE_RATE, recording = read('rx_recording.wav')
@@ -347,18 +472,45 @@ if __name__ == "__main__":
     chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
     chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
 
+
+# #-------------------------------------main sequence------------------------------------------
+#     payload, start_payload, end_payload, last_valid_block_index  = start_end_synchronise(recording, chirp_up, chirp_down)
+#     time_blocks = sync_chopper(payload, last_valid_block_index )
+#     # time_blocks = time_OFDM_chopper(payload)
+#     useful_freq_blocks  = freq_domain(time_blocks)
+#     h_estimated_array = channel_estimation(useful_freq_blocks, np.load(PILOT_NPY), "zf")
+#     reconstructed_data = reconstruct_data_blocks(useful_freq_blocks, h_estimated_array)
+#     corrected_blocks = phase_error_correction(reconstructed_data, output["payload_data_blocks"], output["payload_type_list"])
+
+# #-------------------------------------plotting & tests---------------------------------------------
+#     plot_equalised_blocks(corrected_blocks[15], output["payload_data_blocks"][15])
+#     print(len(recording))
+#     print ("transmitted signal: ", payload,"start bin: ", start_payload, "end bin: ", end_payload)
+#     plt.plot(payload)
+#     plt.show()
+#     compare_tx_rx(recording, start_payload, end_payload)
+#     spectrum_plot(recording)
+
+
+#-------------------------------------main sequence------------------------------------------
     payload, start_payload, end_payload, last_valid_block_index  = start_end_synchronise(recording, chirp_up, chirp_down)
-    time_blocks = sync_chopper(payload, last_valid_block_index )
-    # time_blocks = time_OFDM_chopper(payload)
+    time_blocks = sync_chopper(payload, last_valid_block_index)
     useful_freq_blocks  = freq_domain(time_blocks)
     h_estimated_array = channel_estimation(useful_freq_blocks, np.load(PILOT_NPY), "zf")
-    reconstructed_data = reconstruct_data_blocks(useful_freq_blocks, h_estimated_array)
+    equalised_all_blocks = equalise(useful_freq_blocks, h_estimated_array)
+    corrected_data_blocks = phase_error_correction(equalised_all_blocks,np.load(PILOT_NPY),output["payload_type_list"])
 
-    plot_equalised_blocks(reconstructed_data[5], output["payload_data_blocks"][5])
-
+#-------------------------------------plotting & tests---------------------------------------------
+    if corrected_data_blocks.size > 0:
+        corrected_blocks = corrected_data_blocks 
+        plot_equalised_blocks(corrected_blocks[10], output["payload_data_blocks"][10])
+    else:
+        print("No data blocks were recovered to plot.")
+    
     print(len(recording))
     print ("transmitted signal: ", payload,"start bin: ", start_payload, "end bin: ", end_payload)
     plt.plot(payload)
     plt.show()
     compare_tx_rx(recording, start_payload, end_payload)
     spectrum_plot(recording)
+    calculate_and_plot_ber(corrected_data_blocks, output["payload_data_blocks"])
