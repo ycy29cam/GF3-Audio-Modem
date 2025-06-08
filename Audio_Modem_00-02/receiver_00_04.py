@@ -6,8 +6,9 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 from scipy import signal, fft
 from scipy.io.wavfile import read
-from transmitter_00_03 import generate_chirp, WAV_TX, output, Q_COL
+from transmitter_00_03 import generate_chirp, WAV_TX, Q_COL
 import transmitter_00_03 as tx
+import pickle
 
 FS              = tx.FS
 FFT_LEN         = tx.FFT_LEN
@@ -24,10 +25,13 @@ PILOT_NPY       = 'pilot_symbols.npy'
 COLMAP_NPY      = 'colour_map.npy'
 CHAN_NPY        = 'channel_estimate.npy'
 PILOT_TIME_NO_CP_NPY = "time_pilot_blocks_no_cp.npy"
+OUTPUT          = 'output_dict.pkl'
 
 CHIRP_ATTEN     = tx.CHIRP_ATTEN
 TARGET_PEAK     = tx.TARGET_PEAK
 LENGTH_TOL      = tx.LENGTH_TOL
+with open(OUTPUT, 'rb') as fp:
+    output = pickle.load(fp)
 
 def record_audio(expected_len:int, fs:int=FS) -> np.ndarray:
     print(f"Recording ≈{expected_len/fs:.2f} s …")
@@ -52,11 +56,11 @@ def start_end_synchronise(rx: np.ndarray,
 
 
     search_from = peak_up + len(chirp_up)
-    peak_down_locs = np.where(corr_down > 0.2 * corr_down.max())[0]
+    peak_down_locs = np.where(corr_down > 0.8 * corr_down.max())[0]
     peak_down = peak_down_locs[peak_down_locs > search_from][0]
 
     start_payload = peak_up + len(chirp_up)
-    end_payload   = peak_down + 4
+    end_payload   = peak_down
 
     plt.plot(corr_up, label='up-chirp correlation')
     plt.plot(corr_down, label='down-chirp correlation')
@@ -84,38 +88,86 @@ def start_end_synchronise(rx: np.ndarray,
 
     return payload, start_payload, end_payload, last_valid_block_index
 
-def sync_chopper(payload, start_payload, end_payload, rx, last_valid_block_index, block_length_time = output["ofdm_block_len_with_cp"]):
-    time_blocks = []
-    x = int(start_payload - block_length_time/2)
-    y = int(start_payload + block_length_time*(3/2))
-    sync_peak_index = []
-    sync_max = []
+def sync_chopper(payload, last_valid_block_index, block_length_time = output["ofdm_block_len_with_cp"], cp_len=CP_LEN):
+    """
+    Corrects for sample clock offset by resampling the payload. It finds the optimal
+    resampling factor by maximizing the sum of pilot correlation peaks.
+    """
     time_pilot_blocks_no_cp = np.load(PILOT_TIME_NO_CP_NPY)
-    print("the last valid block index is: ", last_valid_block_index)
-    for i in range(last_valid_block_index//5):
-        window = rx[x:y]
-        pilot_correlation = signal.correlate(window, time_pilot_blocks_no_cp[i] )
-        plt.plot(pilot_correlation)
-        plt.show()
-        sync_start = x + np.argmax(pilot_correlation) - FFT_LEN
-        sync_max.append(np.max(pilot_correlation))
-        sync_peak_index.append(sync_start)
-        chopped_start_index = start_payload + i * 5 * block_length_time + CP_LEN
-        bit_diff = (sync_start - chopped_start_index)
-        if abs(bit_diff) > 5:
-            print(f" Desync on pilot block {i}: sync start index {sync_start}, expected {chopped_start_index}, diff = {bit_diff} bits")
-            sync_peak_index[-1] = chopped_start_index
-        x += 5*block_length_time
-        y += 5*block_length_time
 
-    for i in sync_peak_index:
-        start = i
-        for _ in range(5):
-            block = rx[start : start + FFT_LEN]
-            print("time block length is: ", len(block))
-            time_blocks.append(block)
-            print(start)
-            start += block_length_time
+    # 1. Generate a range of resampling factors to test (e.g., +/- 500 parts-per-million)
+    resampling_factors = np.linspace(0.9995, 1.0005, 51)
+    correlation_sums = []
+
+    # This nested helper function calculates the correlation score for a given payload
+    def get_correlation_sum(current_payload, current_block_len):
+        total_max_corr = 0
+        num_pilot_groups = last_valid_block_index // 5
+
+        for i in range(num_pilot_groups):
+            # Define a search window based on the expected position of the pilot
+            expected_pilot_pos = int(i * 5 * current_block_len)
+            search_start = max(0, expected_pilot_pos - current_block_len)
+            search_end = min(len(current_payload), expected_pilot_pos + current_block_len)
+            window = current_payload[search_start:search_end]
+            
+            # Ensure the window is large enough for correlation
+            if len(window) < len(time_pilot_blocks_no_cp[i]):
+                continue
+
+            pilot_correlation = signal.correlate(window, time_pilot_blocks_no_cp[i], mode='valid')
+            if pilot_correlation.size > 0:
+                total_max_corr += np.max(pilot_correlation)
+        
+        return total_max_corr
+
+    # 2. For each factor, resample the payload and calculate its correlation score
+    for factor in resampling_factors:
+        resampled_len = int(len(payload) * factor)
+        resampled_payload = signal.resample(payload, resampled_len)
+        scaled_block_len = int(block_length_time * factor)
+        
+        current_sum = get_correlation_sum(resampled_payload, scaled_block_len)
+        correlation_sums.append(current_sum)
+
+    # 3. Find the best resampling factor and create the final, corrected payload
+    if not correlation_sums or max(correlation_sums) == 0:
+         print("Warning: Could not find any pilot correlation. Using original payload.")
+         best_factor = 1.0
+         final_payload = payload
+    else:
+        best_idx = np.argmax(correlation_sums)
+        best_factor = resampling_factors[best_idx]
+        final_len = int(len(payload) * best_factor)
+        final_payload = signal.resample(payload, final_len)
+        print(f"Optimal resampling factor found: {best_factor:.6f}")
+
+    # 4. Plot the graph of correlation sums vs. resampling factors
+    plt.figure(figsize=(9, 5))
+    plt.plot(resampling_factors, correlation_sums, '.-')
+    plt.axvline(best_factor, color='r', linestyle='--', label=f'Best Factor: {best_factor:.6f}')
+    plt.title("Resampling Factor vs. Sum of Max Pilot Correlations")
+    plt.xlabel("Resampling Factor")
+    plt.ylabel("Sum of Max Correlation Values")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
+    # 5. Chop the optimally resampled payload into blocks
+    final_block_len = int(block_length_time * best_factor)
+    final_cp_len = int(cp_len * best_factor)
+    
+    time_blocks = []
+    num_blocks = len(final_payload) // final_block_len
+    for i in range(num_blocks):
+        block_with_cp = final_payload[i * final_block_len : (i + 1) * final_block_len]
+        
+        # Ensure the block is long enough to have a cyclic prefix to remove
+        if len(block_with_cp) > final_cp_len:
+            block_no_cp = block_with_cp[final_cp_len:]
+            time_blocks.append(block_no_cp)
+            
     return np.array(time_blocks)
 
 def time_OFDM_chopper(payload, block_length_time = output["ofdm_block_len_with_cp"], cp_len=CP_LEN):
@@ -287,22 +339,24 @@ def plot_equalised_blocks(equalised_data_blocks: np.ndarray, sequenced_data_bloc
 
 
 if __name__ == "__main__":
-    # record_audio(960000)
+    record_audio(600000)
     SAMPLE_RATE, recording = read('rx_recording.wav')
     # recording = output["waveform"]
     chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
     chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
 
     payload, start_payload, end_payload, last_valid_block_index  = start_end_synchronise(recording, chirp_up, chirp_down)
-    time_blocks = sync_chopper(payload ,start_payload, end_payload, recording,last_valid_block_index )
-    # time_blocks = time_OFDM_chopper(payload)
+    # time_blocks = sync_chopper(payload, last_valid_block_index )
+    time_blocks = time_OFDM_chopper(payload)
     useful_freq_blocks  = freq_domain(time_blocks)
     h_estimated_array = channel_estimation(useful_freq_blocks, np.load(PILOT_NPY), "zf")
     reconstructed_data = reconstruct_data_blocks(useful_freq_blocks, h_estimated_array)
 
-    plot_equalised_blocks(reconstructed_data[8], output["payload_data_blocks"][8])
+    plot_equalised_blocks(reconstructed_data[0], output["payload_data_blocks"][0])
 
     print(len(recording))
     print ("transmitted signal: ", payload,"start bin: ", start_payload, "end bin: ", end_payload)
+    plt.plot(payload)
+    plt.show()
     compare_tx_rx(recording, start_payload, end_payload)
     spectrum_plot(recording)

@@ -4,6 +4,7 @@ import sounddevice as sd
 import soundfile as sf
 import matplotlib.pyplot as plt
 from scipy import signal, fft
+import pickle
 
 
 FS              = 48_000        # audio sample-rate (Hz)
@@ -20,6 +21,7 @@ DATA_NPY        = 'data_symbols.npy' # Will now store frequency-domain data symb
 COLMAP_NPY      = 'colour_map.npy'
 CHAN_NPY        = 'channel_estimate.npy'
 PILOT_TIME_NO_CP_NPY = "time_pilot_blocks_no_cp.npy"
+OUTPUT          = 'output_dict.pkl'
 
 CHIRP_ATTEN     = 0.80          # scale applied to both chirps
 TARGET_PEAK     = 0.80          # peak of every OFDM block after scaling
@@ -162,6 +164,9 @@ def prepare_tx_sequence(plot = False) -> dict:
     return { "waveform": waveform_scaled, **info}
 
 
-output = prepare_tx_sequence(True)
-if __name__ == "__main__":
-    pass
+# output = prepare_tx_sequence(True)
+with open(OUTPUT, 'wb') as fp:
+    pickle.dump(prepare_tx_sequence(), fp)
+
+# if __name__ == "__main__":
+#     pass
