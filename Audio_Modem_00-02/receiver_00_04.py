@@ -354,10 +354,10 @@ def compare_tx_rx(rx:np.ndarray, start_rx_payload:int, end_rx_payload_boundary:i
     plt.ylabel("normalised amplitude")
     plt.legend(); plt.tight_layout(); plt.show()
 
-def _means_by_colour(z_flat, colours_flat):
-    ucols = np.unique(colours_flat)
-    means = {c: np.mean(z_flat[colours_flat == c]) for c in ucols}
-    return means
+# def _means_by_colour(z_flat, colours_flat):
+#     ucols = np.unique(colours_flat)
+#     means = {c: np.mean(z_flat[colours_flat == c]) for c in ucols}
+#     return means
 
 def spectrum_plot(sig:np.ndarray, fs:int=FS):
     f, Pxx = signal.welch(sig, fs, nperseg=4096)
@@ -500,33 +500,12 @@ def calculate_and_plot_ber(received_symbols, transmitted_symbols):
     plt.show()
 
 if __name__ == "__main__":
-    # record_audio(600000)
+    record_audio(20*FS)
     SAMPLE_RATE, recording = read('rx_recording.wav')
     # recording = output["waveform"]
     chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
     chirp_down  = generate_chirp(F1, F0, CHIRP_LEN_S)
 
-
-# #-------------------------------------main sequence------------------------------------------
-#     payload, start_payload, end_payload, last_valid_block_index  = start_end_synchronise(recording, chirp_up, chirp_down)
-#     time_blocks = sync_chopper(payload, last_valid_block_index )
-#     # time_blocks = time_OFDM_chopper(payload)
-#     useful_freq_blocks  = freq_domain(time_blocks)
-#     h_estimated_array = channel_estimation(useful_freq_blocks, np.load(PILOT_NPY), "zf")
-#     reconstructed_data = reconstruct_data_blocks(useful_freq_blocks, h_estimated_array)
-#     corrected_blocks = phase_error_correction(reconstructed_data, output["payload_data_blocks"], output["payload_type_list"])
-
-# #-------------------------------------plotting & tests---------------------------------------------
-#     plot_equalised_blocks(corrected_blocks[15], output["payload_data_blocks"][15])
-#     print(len(recording))
-#     print ("transmitted signal: ", payload,"start bin: ", start_payload, "end bin: ", end_payload)
-#     plt.plot(payload)
-#     plt.show()
-#     compare_tx_rx(recording, start_payload, end_payload)
-#     spectrum_plot(recording)
-
-
-#-------------------------------------main sequence------------------------------------------
     payload, start_payload, end_payload, last_valid_block_index  = start_end_synchronise(recording, chirp_up, chirp_down)
     time_blocks = sync_chopper(payload, last_valid_block_index)
     useful_freq_blocks  = freq_domain(time_blocks)
