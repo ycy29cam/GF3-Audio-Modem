@@ -500,7 +500,7 @@ def calculate_and_plot_ber(received_symbols, transmitted_symbols):
     plt.show()
 
 if __name__ == "__main__":
-    record_audio(20*FS)
+    # record_audio(20*FS)
     SAMPLE_RATE, recording = read('rx_recording.wav')
     # recording = output["waveform"]
     chirp_up    = generate_chirp(F0, F1, CHIRP_LEN_S)
@@ -516,7 +516,7 @@ if __name__ == "__main__":
 #-------------------------------------plotting & tests---------------------------------------------
     if corrected_data_blocks.size > 0:
         corrected_blocks = corrected_data_blocks 
-        plot_equalised_blocks(corrected_blocks[10], output["payload_data_blocks"][10])
+        plot_equalised_blocks(corrected_blocks[20], output["payload_data_blocks"][20])
     else:
         print("No data blocks were recovered to plot.")
     
