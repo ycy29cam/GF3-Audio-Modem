@@ -407,63 +407,97 @@ def plot_equalised_blocks(equalised_data_blocks: np.ndarray, sequenced_data_bloc
 
 def calculate_and_plot_ber(received_symbols, transmitted_symbols):
     """
-    Calculates and plots the pre-LDPC Bit Error Rate.
+    Calculates and plots the Bit Error Rate for each subcarrier bin,
+    averaged over all data blocks.
     
     Args:
         received_symbols (np.ndarray): The final, corrected data symbols.
+                                       Shape: (num_blocks, num_subcarriers)
         transmitted_symbols (np.ndarray): The ideal transmitted data symbols.
+                                          Shape: (num_blocks, num_subcarriers)
     """
-    # Define the mapping from an ideal symbol's coordinates back to bits
-    sym_to_bits_map = { (1,1):(0,0), (1,-1):(0,1), (-1,-1):(1,1), (-1,1):(1,0) }
-    
-    # Flatten arrays for processing
-    rx_flat = received_symbols.ravel()
-    tx_flat = transmitted_symbols.ravel()
-    
-    # --- Hard Decision Demodulation of Received Symbols ---
-    # Decide the symbol based on the quadrant the point is in
-    detected_real = np.sign(rx_flat.real)
-    detected_imag = np.sign(rx_flat.imag)
-    detected_real[detected_real == 0] = 1 # Avoids (0,0) case
-    detected_imag[detected_imag == 0] = 1
-    decided_symbols_coords = zip(detected_real, detected_imag)
-
-    # --- Convert Symbols to Bits ---
-    rx_bits = np.array([bit for coords in decided_symbols_coords for bit in sym_to_bits_map.get(coords, (0,0))])
-    tx_bits = np.array([bit for sym in tx_flat for bit in sym_to_bits_map.get((sym.real, sym.imag), (0,0))])
-
-    # --- Compare and Calculate BER ---
-    min_len = min(len(rx_bits), len(tx_bits))
-    if min_len == 0:
-        print("No bits to compare for BER.")
+    # --- Input Validation ---
+    if received_symbols.shape != transmitted_symbols.shape:
+        print("Error: Shape mismatch between received and transmitted symbols. Cannot calculate BER.")
         return
-        
-    rx_bits = rx_bits[:min_len]
-    tx_bits = tx_bits[:min_len]
+    
+    if received_symbols.ndim != 2 or received_symbols.size == 0:
+        print("Error: Input symbols must be a 2D array of (blocks, subcarriers).")
+        return
 
-    num_errors = np.sum(rx_bits != tx_bits)
-    total_bits = len(tx_bits)
-    ber = num_errors / total_bits
+    num_blocks, num_subcarriers = received_symbols.shape
+
+    # --- Demodulation (Symbols to Bits) for each symbol, preserving structure ---
+    sym_to_bits_map = {(1, 1): (0, 0), (1, -1): (0, 1), (-1, -1): (1, 1), (-1, 1): (1, 0)}
+
+    # Convert transmitted symbols to a 3D bit array: (blocks, subcarriers, 2 bits)
+    tx_bits = np.array(
+        [[sym_to_bits_map.get((s.real, s.imag)) for s in block] for block in transmitted_symbols]
+    )
+
+    # Perform hard-decision demodulation on received symbols
+    detected_real = np.sign(received_symbols.real)
+    detected_imag = np.sign(received_symbols.imag)
+    # Handle cases where a symbol is exactly on an axis
+    detected_real[detected_real == 0] = 1
+    detected_imag[detected_imag == 0] = 1
+    
+    # Convert received symbols to a 3D bit array
+    rx_bits = np.zeros_like(tx_bits)
+    for i in range(num_blocks):
+        for j in range(num_subcarriers):
+            coords = (detected_real[i, j], detected_imag[i, j])
+            rx_bits[i, j, :] = sym_to_bits_map.get(coords, (0, 0))
+
+    # --- BER Calculation per Bin ---
+    # Find all bit errors, resulting in a 3D boolean array
+    bit_errors = (rx_bits != tx_bits)
+    
+    # Sum errors over all blocks and the two bits per symbol for each subcarrier bin
+    errors_per_bin = np.sum(bit_errors, axis=(0, 2))
+    
+    # Calculate BER for each bin
+    total_bits_per_bin = num_blocks * 2  # Each symbol carries 2 bits
+    ber_per_bin = errors_per_bin / total_bits_per_bin
+    
+    # Calculate the overall average BER for a summary statistic
+    total_errors = np.sum(errors_per_bin)
+    total_bits = num_blocks * num_subcarriers * 2
+    overall_ber = total_errors / total_bits
     
     print(f"\n--- Bit Error Rate (BER) ---")
     print(f"Total Bits Compared: {total_bits}")
-    print(f"Number of Bit Errors: {num_errors}")
-    print(f"Pre-LDPC BER: {ber:.2e}")
+    print(f"Total Bit Errors: {total_errors}")
+    print(f"Overall Average BER: {overall_ber:.2e}")
 
-    # --- Plot Error Locations ---
-    plt.figure(figsize=(12, 4))
-    bit_errors = (rx_bits != tx_bits)
-    error_indices = np.where(bit_errors)[0]
-    plt.stem(error_indices, np.ones_like(error_indices), linefmt='r-', markerfmt='rx', basefmt=' ')
-    plt.title('Bit Error Locations')
-    plt.xlabel('Bit Index')
-    plt.ylabel('Error')
-    plt.xlim(0, total_bits)
-    plt.yticks([])
-    plt.grid(True, axis='x')
+    # --- ADDED: Calculate and print BER for the specific sub-range ---
+    start_bin = 200
+    end_bin = 2143  # Inclusive
+    # Check if the requested range is valid for the number of subcarriers
+    if num_subcarriers > end_bin:
+        # Slice the ber_per_bin array. Add 1 to end_bin for Python's exclusive slicing.
+        range_slice = ber_per_bin[start_bin : end_bin + 1]
+        avg_ber_in_range = np.mean(range_slice)
+        print(f"Average BER for bins {start_bin}-{end_bin} (inclusive): {avg_ber_in_range:.2e}")
+    else:
+        print(f"Warning: Cannot calculate BER for range {start_bin}-{end_bin} as it exceeds the number of subcarriers ({num_subcarriers}).")
+
+    # --- Plotting BER per Bin ---
+    plt.figure(figsize=(12, 5))
+    subcarrier_indices = np.arange(num_subcarriers)
+    
+    plt.bar(subcarrier_indices, ber_per_bin, width=1.0, label=f'BER (Avg over {num_blocks} blocks)')
+    
+    plt.title('Average Bit Error Rate per Subcarrier Bin')
+    plt.xlabel('Subcarrier Index (Bin)')
+    plt.ylabel('Average Bit Error Rate')
+    plt.grid(True, which='both', linestyle=':')
+    plt.yscale('log') # BER is best viewed on a logarithmic scale
+    plt.ylim(bottom=1e-5, top=1.0) # Set sensible Y-axis limits
+    plt.xlim(0, num_subcarriers - 1)
+    plt.legend()
     plt.tight_layout()
     plt.show()
-
 
 if __name__ == "__main__":
     # record_audio(600000)
@@ -513,4 +547,4 @@ if __name__ == "__main__":
     plt.show()
     compare_tx_rx(recording, start_payload, end_payload)
     spectrum_plot(recording)
-    calculate_and_plot_ber(corrected_data_blocks, output["payload_data_blocks"])
+    calculate_and_plot_ber(corrected_data_blocks, output["payload_data_blocks"][:len(corrected_data_blocks)])
