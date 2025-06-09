@@ -560,11 +560,12 @@ if __name__ == "__main__":
     h_estimated_array = channel_estimation(useful_freq_blocks, np.load(PILOT_NPY), "zf")
     equalised_all_blocks = equalise(useful_freq_blocks, h_estimated_array)
     corrected_data_blocks = phase_error_correction(equalised_all_blocks, np.load(PILOT_NPY))
+    print("Shape of equalised data blocks: ", corrected_data_blocks.shape)
 
 #-------------------------------LDPC shizzle---------------------------------------------
     decoded_info_bits = []
     for blk_idx, blk_syms in enumerate(corrected_data_blocks):
-
+        print("Enumerate shape: ", blk_idx, blk_syms.shape)
         # ----- build one 3888-LLR vector ---------------------------
         llr = np.empty(2 * LDPC_N, np.float64)
         sigma2_est = calculate_noise_variance_robust(blk_syms)
@@ -572,17 +573,21 @@ if __name__ == "__main__":
         for k, s in enumerate(blk_syms[200:200 + LDPC_N]):  # <- blk_syms, not eq_syms
             llr[2 * k] = gain * s.real
             llr[2 * k + 1] = gain * s.imag
+        print("Shape of LLR pre-clipped (per 4095 freq sym): ", np.array(llr).shape)
         np.clip(llr, -LLR_MAX, LLR_MAX, out=llr)
+        print("Shape of LLR post-clipped (per 4095 freq sym): ", llr.shape)
 
         # ----- de-interleave exactly like the mapper ---------------
         #pairs = llr.reshape(-1, 2)  # 1944×2
         #llr_cw1 = pairs[:, 0].ravel()  # I bits
         #llr_cw2 = pairs[:, 1].ravel()  # Q bits
         pairs = llr.reshape(-1, 2)  # shape (1 944, 2)
+        print("LLR bit pairs shape (per 4095 freq sym): ", pairs.shape)
         SYMS_PER_CW = LDPC_N // 2  # 972
 
         llr_cw1 = np.ascontiguousarray(pairs[:SYMS_PER_CW].ravel())
         llr_cw2 = np.ascontiguousarray(pairs[SYMS_PER_CW:].ravel())
+        print("Shape of LDPC block to be decoded: ", llr_cw1.shape, llr_cw2.shape)
 
         """
         # ----- LDPC decode (ldpc_jossy returns hard bits) ----------
@@ -595,10 +600,28 @@ if __name__ == "__main__":
 
         u1_hat = ldpc_decode_cw(llr_cw1)
         u2_hat = ldpc_decode_cw(llr_cw2)
+        print("Shape of LDPC block decoded: ", u1_hat.shape, u2_hat.shape)
 
-        # ----- reference TX info bits ------------------------------
-        tx_pair = output["payload_info_bits"][blk_idx].astype(np.int8)
-        tx_u1, tx_u2 = np.split(tx_pair, 2)
+        # ----- reference TX info bits (for testing only) ------------------------------
+        """
+        print("Length of payload info bits: ", len(output["payload_info_bits"])) # Test point
+        print("This should be 1944 (LDPC_N): ", LDPC_N)
+        print("Two truncate points: ", blk_idx * LDPC_N, (blk_idx + 1) * LDPC_N)
+        tx_pair = output["payload_info_bits"][blk_idx * LDPC_N: (blk_idx + 1) * LDPC_N].astype(np.int8)
+        print("Length of payload info bits selected: ", len(tx_pair))
+        if (blk_idx + 1) * LDPC_N >= len(output["payload_info_bits"]):
+            if len(tx_pair) == 1944:
+                tx_u1, tx_u2 = np.split(tx_pair, 2)
+            elif len(tx_pair) == 972:
+                print("Padding required")
+                tx_u1 = tx_pair
+                tx_u2 = u2_hat
+                print("Last LDPC block does not matter, padded perfectly")
+            else:
+                pass
+                raise Exception("The decoded LDPC block has the wrong length")
+        else:
+            tx_u1, tx_u2 = np.split(tx_pair, 2)
 
         #err1 = np.count_nonzero(u1_hat ^ tx_u1)
         err1 = np.count_nonzero(u1_hat.astype(np.uint8) ^ tx_u1.astype(np.uint8))
@@ -607,8 +630,10 @@ if __name__ == "__main__":
 
         print(f"[blk {blk_idx}] POST-LDPC CW1: {err1}/{LDPC_K}  BER={err1 / LDPC_K:.2e}")
         print(f"[blk {blk_idx}] POST-LDPC CW2: {err2}/{LDPC_K}  BER={err2 / LDPC_K:.2e}")
+        """
 
-        decoded_info_bits.append((u1_hat, u2_hat))
+        decoded_info_bits.append(u1_hat)
+        decoded_info_bits.append(u2_hat)
 
 
     # 11) Print out first few recovered bits of the first block for verification
@@ -617,15 +642,38 @@ if __name__ == "__main__":
     #print(" Codeword 1 (first 16 bits):", first_rec1[:16], "…")
     #print(" Codeword 2 (first 16 bits):", first_rec2[:16], "…")
 
+    print("Decoder output shape: ", np.array(decoded_info_bits).shape)
+    print(len(decoded_info_bits))
+
+    received_binary = np.array(decoded_info_bits).flatten()
+    print("Shape of binary sequence: ", received_binary.shape)
+
+    """
     info1_0, info2_0 = decoded_info_bits[0]
     print("Decoded info bits (first OFDM symbol):")
     print(" Codeword 1 (first 16 bits):", info1_0[:16], "…")
     print(" Codeword 2 (first 16 bits):", info2_0[:16], "…")
+    """
 
     # Save the decoded bits / ASCII
-    all_bits = np.concatenate([np.concatenate(p) for p in decoded_info_bits])
-    with open("rx_bits.bin", "wb") as f:
-        np.packbits(all_bits).tofile(f)
+    np.save("received_bin", received_binary)
+
+    print(f'Received {received_binary.size} bits, first 64 bits:\n', received_binary[:64])
+
+    byte_array = np.packbits(received_binary)
+
+    file_name_terminate = np.where(byte_array == 0)[0][0]
+    file_name = byte_array[:file_name_terminate].tobytes().decode("utf-8")
+
+    file_size_terminate = np.where(byte_array == 0)[0][1]
+    file_size = int(byte_array[file_name_terminate + 1:file_size_terminate].tobytes().decode("utf-8"))
+
+    file_content = byte_array[(file_size_terminate + 1):(file_size_terminate + int(file_size) + 1)]
+
+    print("File name: ", file_name, ", File size: ", file_size, ", File content: ", file_content.tobytes())
+
+    with open("received.txt", "wb") as f:
+        f.write(file_content.tobytes())
 
     # 12) Optionally compare TX vs RX in time‐domain & show spectrum
     compare_tx_rx(recording, start_payload, end_payload)

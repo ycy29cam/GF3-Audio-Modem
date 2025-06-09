@@ -89,7 +89,7 @@ def ldpc_encoder(binary_sequence: np.ndarray):
     flat = np.array(ldpc_blocks).ravel()
     paired = flat.reshape(-1, 2)
     print("Shape of LDPC output, as bit pairs", paired.shape)
-    return paired
+    return paired, bits
 
 def ldpc_insert(prefilled: np.array, ldpc_data: np.array):
     print("Prefilled data block array shape", prefilled.shape)
@@ -158,7 +158,7 @@ def prepare_tx_sequence(plot=False) -> dict:
     data_filler = np.random.RandomState(seed=24)
     prefilled_data = data_filler.randint(0, 2, size=(int(4 * block_groups), n_qpsk, 2), dtype=np.int8) # Shape = (data blocks needed, 4095, 2)
 
-    ldpc_bit_pairs = ldpc_encoder(FILE_BIN)
+    ldpc_bit_pairs, padded_payload_bin = ldpc_encoder(FILE_BIN)
     ldpc_bit_pairs_insert = ldpc_bit_pairs.reshape(int(ldpc_bit_pairs.shape[0] / c.K), c.K, 2) # Shape = (padded length / 972, 972, 2)
 
     data_blocks_bin = ldpc_insert(prefilled_data, ldpc_bit_pairs_insert)
@@ -270,13 +270,14 @@ def prepare_tx_sequence(plot=False) -> dict:
         #"payload_data_blocks": np.array(data_freq_symbols_),
         "payload_data_blocks": np.stack(data_block_freq),
 
-        "payload_info_bits" : FILE_BIN
+        "payload_info_bits" : padded_payload_bin
 
     }
+    print("Padded file binary length: ", len(padded_payload_bin))
     return {"waveform": np.concatenate(sequence), **info}
 
 with open(OUTPUT, 'wb') as fp:
-    pickle.dump(prepare_tx_sequence(), fp)
+    pickle.dump(prepare_tx_sequence(plot=True), fp)
 
 end_time = time.time()
 elapsed_time = end_time - start_time
