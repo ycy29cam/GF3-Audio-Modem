@@ -7,7 +7,7 @@ from matplotlib.patches import Patch
 from scipy import signal, fft
 from scipy.io.wavfile import read
 from Tx_LPDC_2 import generate_chirp, WAV_TX, Q_COL
-import Tx_LPDC_2 as tx
+import Transmitter3000 as tx
 import ldpc_jossy
 import pickle
 
