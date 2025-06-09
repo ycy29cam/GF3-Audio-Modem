@@ -16,7 +16,7 @@ def record_audio(expected_len: int, fs: int = FS) -> np.ndarray:
     rec = sd.rec(expected_len, samplerate=fs, channels=1,
                  dtype='float32').squeeze()  # removes extra unused dimension
     sd.wait()
-    sf.write(WAV_RX_1, rec, fs)
+    sf.write(WAV_RX_2, rec, fs)
     return rec
 
-record_audio(20*FS)
+record_audio(10*FS)

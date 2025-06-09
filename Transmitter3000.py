@@ -105,7 +105,7 @@ def ldpc_insert(prefilled: np.array, ldpc_data: np.array):
     n_full_pairs = B // 2
 
     for i in range(min(n_full_pairs, A)):
-        data[i, start:start+block_size, :] = ldpc_data[2*i]
+        data[i, start:start+block_size, :] = ldpc_data[2*i] 
         data[i, start+block_size:start+block_size+block_size, :] = ldpc_data[2*i]
 
     if (B % 2 == 1) and (n_full_pairs < A):
@@ -233,7 +233,7 @@ def prepare_tx_sequence(plot=False) -> dict:
     else:
         waveform_scaled = waveform_unscaled.astype(np.float32)
 
-    sf.write(WAV_TX, waveform_scaled, FS)
+    sf.write(WAV_TX, waveform_scaled, FS)#
 
     # ------------- plot function -------------
     if plot:
@@ -282,6 +282,7 @@ with open(OUTPUT, 'wb') as fp:
 end_time = time.time()
 elapsed_time = end_time - start_time
 print(f"Elapsed Time: {elapsed_time} seconds")
+
 
 
 if __name__ == "__main__":
