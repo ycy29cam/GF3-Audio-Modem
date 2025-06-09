@@ -513,7 +513,7 @@ if __name__ == "__main__":
 #-------------------------------------plotting & tests---------------------------------------------
     if corrected_data_blocks.size > 0:
         corrected_blocks = corrected_data_blocks 
-        plot_equalised_blocks(corrected_blocks[20], output["payload_data_blocks"][20])
+        plot_equalised_blocks(corrected_blocks[3], output["payload_data_blocks"][3])
     else:
         print("No data blocks were recovered to plot.")
     
