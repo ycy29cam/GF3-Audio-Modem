@@ -541,6 +541,10 @@ def qpsk_to_bits(sym_array):
     bits[1::2] = bQ
     return bits
 
+def ldpc_decode_cw(llr_vec: np.ndarray) -> np.ndarray:
+    soft, _ = my_ldpc.decode(llr_vec)
+    return (soft < 0).astype(np.uint8)[:LDPC_K] 
+
 if __name__ == "__main__":
 #------------------------------initialization-------------------------------------------
     # record_audio(20*FS)
@@ -559,61 +563,70 @@ if __name__ == "__main__":
 
 #-------------------------------LDPC shizzle---------------------------------------------
     decoded_info_bits = []
-    print(f"\n--- Starting LDPC Decode for {len(corrected_data_blocks)} data blocks ---")
+    for blk_idx, blk_syms in enumerate(corrected_data_blocks):
 
-    # 4. Loop through each corrected data block to decode it
-    for blk_idx, blk_symbols in enumerate(corrected_data_blocks):
-        
-        # --- Slice, Estimate Noise, and Calculate LLRs ---
-        
-        # Take the slice of the block that contains the LDPC-coded data
-        # Note: Your Tx code zero-pads, so we only take the first LDPC_N symbols
-        eq_payload = blk_symbols[:LDPC_N]
+        # ----- build one 3888-LLR vector ---------------------------
+        llr = np.empty(2 * LDPC_N, np.float64)
+        sigma2_est = calculate_noise_variance_robust(blk_syms)
+        gain = min(2.0 / sigma2_est, 10.0)
+        for k, s in enumerate(blk_syms[:LDPC_N]):  # <- blk_syms, not eq_syms
+            llr[2 * k] = gain * s.real
+            llr[2 * k + 1] = gain * s.imag
+        np.clip(llr, -LLR_MAX, LLR_MAX, out=llr)
 
-        # Use the robust function to estimate noise variance FOR THIS BLOCK ONLY
-        sigma2_est = calculate_noise_variance_robust(eq_payload)
-        
-        # Calculate LLR gain, capping it to avoid massive LLRs from very low noise
-        gain = min(2.0 / (sigma2_est + 1e-12), 20.0)
-        
-        # Build the LLR vector for the decoder
-        llr = np.zeros(2 * LDPC_N, dtype=np.float32)
-        llr[0::2] = gain * eq_payload.real  # I-bits
-        llr[1::2] = gain * eq_payload.imag  # Q-bits
-        llr = np.clip(llr, -LLR_MAX, LLR_MAX)
+        # ----- de-interleave exactly like the mapper ---------------
+        #pairs = llr.reshape(-1, 2)  # 1944×2
+        #llr_cw1 = pairs[:, 0].ravel()  # I bits
+        #llr_cw2 = pairs[:, 1].ravel()  # Q bits
+        pairs = llr.reshape(-1, 2)  # shape (1 944, 2)
+        SYMS_PER_CW = LDPC_N // 2  # 972
 
-        # --- PRE-LDPC BER (for diagnostics) ---
-        hard_bits = (llr < 0).astype(int)
-        tx_bits = qpsk_to_bits(output["payload_data_blocks"][blk_idx])
-        pre_err = np.sum(hard_bits != tx_bits)
-        print(f"\n[Block {blk_idx}] PRE-LDPC BER: {pre_err / len(tx_bits):.2e} (σ²={sigma2_est:.2e}, gain={gain:.2f})")
+        llr_cw1 = np.ascontiguousarray(pairs[:SYMS_PER_CW].ravel())
+        llr_cw2 = np.ascontiguousarray(pairs[SYMS_PER_CW:].ravel())
 
-        # --- Decode the Codewords ---
-        
-        # Split LLRs for the two interleaved codewords
-        llr_cw1 = llr[0::2]
-        llr_cw2 = llr[1::2]
-        
-        # Decode both
-        rec_info1 = (my_ldpc.decode(llr_cw1)[0] > 0).astype(np.int8)[:LDPC_K]
-        rec_info2 = (my_ldpc.decode(llr_cw2)[0] > 0).astype(np.int8)[:LDPC_K]
-        decoded_info_bits.append((rec_info1, rec_info2))
+        """
+        # ----- LDPC decode (ldpc_jossy returns hard bits) ----------
+        #cw1_hat, _ = my_ldpc.decode(llr_cw1)  # 0/1 ints, length 1944
+        #cw2_hat, _ = my_ldpc.decode(llr_cw2)
 
-        # --- POST-LDPC BER (the final result) ---
-        tx_info1 = output["payload_info_bits"][blk_idx][:LDPC_K]
-        tx_info2 = output["payload_info_bits"][blk_idx][LDPC_K:]
-        
-        err1 = np.sum(rec_info1 != tx_info1)
-        err2 = np.sum(rec_info2 != tx_info2)
-        print(f"[Block {blk_idx}] POST-LDPC CW1: {err1}/{LDPC_K} errors | CW2: {err2}/{LDPC_K} errors")
+        #u1_hat = cw1_hat[:LDPC_K].astype(np.int8)  # 972 information bits
+        #u2_hat = cw2_hat[:LDPC_K].astype(np.int8)
+        """
 
-    # 5. Print a sample of the final decoded data for verification
-    if decoded_info_bits:
-        first_rec1, first_rec2 = decoded_info_bits[0]
-        print("\n--- Final Decoded Info Bits (Sample from Block 0) ---")
-        print("Codeword 1 (first 16 bits):", first_rec1[:16])
-        print("Codeword 2 (first 16 bits):", first_rec2[:16])
+        u1_hat = ldpc_decode_cw(llr_cw1)
+        u2_hat = ldpc_decode_cw(llr_cw2)
 
-    # 6. Final diagnostic plots
+        # ----- reference TX info bits ------------------------------
+        tx_pair = output["payload_info_bits"][blk_idx].astype(np.int8)
+        tx_u1, tx_u2 = np.split(tx_pair, 2)
+
+        #err1 = np.count_nonzero(u1_hat ^ tx_u1)
+        err1 = np.count_nonzero(u1_hat.astype(np.uint8) ^ tx_u1.astype(np.uint8))
+        #err2 = np.count_nonzero(u2_hat ^ tx_u2)
+        err2 = np.count_nonzero(u2_hat.astype(np.uint8) ^ tx_u2.astype(np.uint8))
+
+        print(f"[blk {blk_idx}] POST-LDPC CW1: {err1}/{LDPC_K}  BER={err1 / LDPC_K:.2e}")
+        print(f"[blk {blk_idx}] POST-LDPC CW2: {err2}/{LDPC_K}  BER={err2 / LDPC_K:.2e}")
+
+        decoded_info_bits.append((u1_hat, u2_hat))
+
+
+    # 11) Print out first few recovered bits of the first block for verification
+    #first_rec1, first_rec2 = decoded_info_bits[0]
+    #print("Decoded info bits (first OFDM symbol):")
+    #print(" Codeword 1 (first 16 bits):", first_rec1[:16], "…")
+    #print(" Codeword 2 (first 16 bits):", first_rec2[:16], "…")
+
+    info1_0, info2_0 = decoded_info_bits[0]
+    print("Decoded info bits (first OFDM symbol):")
+    print(" Codeword 1 (first 16 bits):", info1_0[:16], "…")
+    print(" Codeword 2 (first 16 bits):", info2_0[:16], "…")
+
+    # Save the decoded bits / ASCII
+    all_bits = np.concatenate([np.concatenate(p) for p in decoded_info_bits])
+    with open("rx_bits.bin", "wb") as f:
+        np.packbits(all_bits).tofile(f)
+
+    # 12) Optionally compare TX vs RX in time‐domain & show spectrum
     compare_tx_rx(recording, start_payload, end_payload)
     spectrum_plot(recording)
