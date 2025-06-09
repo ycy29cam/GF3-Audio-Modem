@@ -195,7 +195,8 @@ def channel_estimation(blocks: np.ndarray,
                        noise_var: float = 1e-4) -> np.ndarray:
 
     eps = 1e-12
-    payload_type_list = output["payload_type_list"]
+    # payload_type_list = output["payload_type_list"]
+    payload_type_list = ["pilot" if i % 5 == 0 else "data" for i in range(last_valid_block_index)]
     N = len(payload_type_list)
     estimates = [None] * N
 
@@ -228,7 +229,6 @@ def channel_estimation(blocks: np.ndarray,
     np.save(CHAN_NPY, H_est)
     return H_est
 
-
 def reconstruct_data_blocks(useful_frequency_blocks, H_est_array):
     payload_type_list = output["payload_type_list"]
     assert len(useful_frequency_blocks) == len(payload_type_list), "Mismatch between blocks and payload types"
@@ -238,7 +238,7 @@ def reconstruct_data_blocks(useful_frequency_blocks, H_est_array):
     decoded_datablocks = data_blocks/data_H_est_array
     return decoded_datablocks
 
-def phase_error_correction(equalised_blocks, pilot_symbols, payload_type_list):
+def phase_error_correction(equalised_blocks, pilot_symbols):
     """
     Corrects phase error and returns ONLY the corrected data blocks.
 
@@ -257,6 +257,9 @@ def phase_error_correction(equalised_blocks, pilot_symbols, payload_type_list):
     Returns:
         np.ndarray: A new array containing ONLY the phase-corrected DATA blocks.
     """
+    # 0. Create Payload_type_list properly lolll
+    payload_type_list = ["pilot" if i % 5 == 0 else "data" for i in range(last_valid_block_index)]
+
     # 1. Find the indices of pilot blocks to use as a reference
     pilot_indices = [i for i, block_type in enumerate(payload_type_list) if block_type == 'pilot']
     pilot_indices = [i for i in pilot_indices if i < len(equalised_blocks)]
@@ -354,11 +357,6 @@ def compare_tx_rx(rx:np.ndarray, start_rx_payload:int, end_rx_payload_boundary:i
     plt.ylabel("normalised amplitude")
     plt.legend(); plt.tight_layout(); plt.show()
 
-# def _means_by_colour(z_flat, colours_flat):
-#     ucols = np.unique(colours_flat)
-#     means = {c: np.mean(z_flat[colours_flat == c]) for c in ucols}
-#     return means
-
 def spectrum_plot(sig:np.ndarray, fs:int=FS):
     f, Pxx = signal.welch(sig, fs, nperseg=4096)
     plt.figure(); plt.semilogy(f, Pxx)
@@ -403,7 +401,6 @@ def plot_equalised_blocks(equalised_data_blocks: np.ndarray, sequenced_data_bloc
     plt.title("Equalised Constellation (coloured by TX symbols)")
     plt.xlabel("I"); plt.ylabel("Q")
     plt.gca().set_aspect('equal'); plt.tight_layout(); plt.show()
-
 
 def calculate_and_plot_ber(received_symbols, transmitted_symbols):
     """
@@ -511,7 +508,7 @@ if __name__ == "__main__":
     useful_freq_blocks  = freq_domain(time_blocks)
     h_estimated_array = channel_estimation(useful_freq_blocks, np.load(PILOT_NPY), "zf")
     equalised_all_blocks = equalise(useful_freq_blocks, h_estimated_array)
-    corrected_data_blocks = phase_error_correction(equalised_all_blocks,np.load(PILOT_NPY),output["payload_type_list"])
+    corrected_data_blocks = phase_error_correction(equalised_all_blocks,np.load(PILOT_NPY))
 
 #-------------------------------------plotting & tests---------------------------------------------
     if corrected_data_blocks.size > 0:
@@ -520,7 +517,6 @@ if __name__ == "__main__":
     else:
         print("No data blocks were recovered to plot.")
     
-    print(len(recording))
     print ("transmitted signal: ", payload,"start bin: ", start_payload, "end bin: ", end_payload)
     plt.plot(payload)
     plt.show()
