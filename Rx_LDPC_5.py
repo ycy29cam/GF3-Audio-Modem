@@ -569,7 +569,7 @@ if __name__ == "__main__":
         llr = np.empty(2 * LDPC_N, np.float64)
         sigma2_est = calculate_noise_variance_robust(blk_syms)
         gain = min(2.0 / sigma2_est, 10.0)
-        for k, s in enumerate(blk_syms[:LDPC_N]):  # <- blk_syms, not eq_syms
+        for k, s in enumerate(blk_syms[200:200 + LDPC_N]):  # <- blk_syms, not eq_syms
             llr[2 * k] = gain * s.real
             llr[2 * k + 1] = gain * s.imag
         np.clip(llr, -LLR_MAX, LLR_MAX, out=llr)
