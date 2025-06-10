@@ -533,10 +533,23 @@ def calculate_and_plot_ber(received_symbols, transmitted_symbols):
     plt.tight_layout()
     plt.show()
 
-def calculate_noise_variance_robust(recieved_pilots): # y = hx + n forthe whole transmission # noise variance is approx 
-
-    # so we need to get Y -  hx = n where Y is all the recieved pilots, h is all the estimated pilots, x is the original sent values and we want an absolute noise estimate fpr all pilot blocks
-
+def calculate_noise_variance_robust(all_freq_blocks, all_h_estimates, sent_pilots, last_valid_block_idx):
+    payload_type_list = ["pilot" if i % 5 == 0 else "data" for i in range(last_valid_block_idx)]
+    pilot_indices = [i for i, b_type in enumerate(payload_type_list) if b_type == 'pilot' and i < len(all_freq_blocks)]
+    if not pilot_indices:
+        print("Warning: No pilot blocks found to estimate noise variance. Returning a default value.")
+        return 1e-3 
+    received_pilots_freq = all_freq_blocks[pilot_indices]
+    channel_estimates_pilots = all_h_estimates[pilot_indices]
+    num_rx_pilots = len(received_pilots_freq)
+    matched_sent_pilots = sent_pilots[:num_rx_pilots]
+    if received_pilots_freq.shape != channel_estimates_pilots.shape or received_pilots_freq.shape != matched_sent_pilots.shape:
+        print(f"Error: Shape mismatch during noise calculation. Cannot proceed.")
+        print(f"Shapes: Y={received_pilots_freq.shape}, h={channel_estimates_pilots.shape}, x={matched_sent_pilots.shape}")
+        return 1e-3
+    noise_estimate = received_pilots_freq - (channel_estimates_pilots * matched_sent_pilots)
+    sigma2_est = np.mean(np.abs(noise_estimate) ** 2)
+    print(f"Robust noise variance (sigma^2) estimated as: {sigma2_est:.2e}")
     return sigma2_est
 
 def qpsk_to_bits(sym_array):
@@ -549,8 +562,8 @@ def qpsk_to_bits(sym_array):
     return bits
 
 def ldpc_decode_cw(llr_vec: np.ndarray) -> np.ndarray:  #!#!#! changed to stop decoding, did not fully fix problem but made it better
-    # soft, _ = my_ldpc.decode(llr_vec)
-    return (llr_vec < 0).astype(np.uint8)[:LDPC_K] 
+    soft, _ = my_ldpc.decode(llr_vec)
+    return (soft < 0).astype(np.uint8)[:LDPC_K] 
 
 if __name__ == "__main__":
 #------------------------------initialization-------------------------------------------
@@ -573,8 +586,12 @@ if __name__ == "__main__":
 
 #-------------------------------LDPC shizzle---------------------------------------------
     decoded_info_bits = []
-    recieved_pilots = #####
-    sigma2_est = calculate_noise_variance_robust(recieved_pilots)
+    sigma2_est = calculate_noise_variance_robust(
+        all_freq_blocks=useful_freq_blocks,
+        all_h_estimates=h_estimated_array,
+        sent_pilots=np.load(PILOT_NPY),
+        last_valid_block_idx=last_valid_block_index
+    )
     for blk_idx, blk_syms in enumerate(corrected_data_blocks):
         print("Enumerate shape: ", blk_idx, blk_syms.shape) 
         # ----- build one 3888-LLR vector ---------------------------
