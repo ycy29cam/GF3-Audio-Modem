@@ -143,6 +143,42 @@ def to_real_ofdm_block(useful_freq_symbols, n=FFT_LEN):
 def add_cyclic_prefix(x: np.ndarray, cp_len: int = CP_LEN) -> np.ndarray:
     return np.concatenate([x[-cp_len:], x])
 
+# ---------- Group 6 ----------
+
+def bits_to_qpsk(bits):
+    '''Convert a list of bits to QPSK constellation values using Gray coding.'''
+    mapping = {(0, 0): 1 + 1j, (0, 1): 1 - 1j, (1, 1): -1 - 1j, (1, 0): -1 + 1j}
+    qpsk_values = []
+    for i in range(0, len(bits), 2):
+        bit_pair = tuple(bits[i:i + 2])
+        for pair, symbol in mapping.items():
+            if pair == bit_pair:
+                qpsk_values.append(symbol)
+                break
+    print(qpsk_values[:10])
+    return np.array(qpsk_values)
+
+def generate_pilot_bits(length):
+    '''Generate random pilot bits of a given length.'''
+    rng = np.random.default_rng(42)
+    pilot_bits = rng.integers(0, 2, length)
+    return pilot_bits
+
+def generate_pilot_block(num_pilot_blocks):
+    '''Generate pilot blocks for the OFDM system in the frequency domain.'''
+    # Generate pilot values
+    PILOT_LENGTH = FFT_LEN // 2 - 1
+    pilot_full_bits = generate_pilot_bits(PILOT_LENGTH * num_pilot_blocks * 2)
+    pilot_full_QPSK = bits_to_qpsk(pilot_full_bits)
+    pilots_freq = []
+    for i in range(num_pilot_blocks):
+        pilot_QPSK = pilot_full_QPSK[i * PILOT_LENGTH : (i + 1) * PILOT_LENGTH]
+        pilot_freq = np.concatenate([[0], pilot_QPSK, [0], np.conjugate(np.flip(pilot_QPSK))])
+        pilots_freq.append(pilot_freq)
+    return pilots_freq #list of arrays
+
+# ---------- End ----------
+
 def prepare_tx_sequence(plot=False) -> dict:
     # ------------- build pieces -------------
     silence = np.zeros(int(SILENCE_LEN_S * FS), np.float32)
@@ -173,32 +209,23 @@ def prepare_tx_sequence(plot=False) -> dict:
 
     # ------------- build sequence --> 'payload' list will contain TD blocks WITHOUT CP -------------
 
-    pilot_long_bits = random_bitpairs(n =(n_qpsk * 200)) # +1 just in case there isn't enough pilots
-    print(pilot_long_bits[:10])
+    long_pilot_blocks = np.array(generate_pilot_block(200))[:,:int(FFT_LEN / 2 - 1)] # In frequency domain, complex QPSK symbols
+    print("Shape of long pilot array (in freq): ", np.array(long_pilot_blocks).shape) # Test point
+    # What should I save as? ----- !!! -----
+    used_pilot_blocks = long_pilot_blocks[:block_groups] # Not needed
+    print("Shape of used pilot array (in freq): ", used_pilot_blocks.shape) # Test point
 
     time_pilot_blocks_no_cp = []
-    pilot_freq_symbols = []
-    pilot_colours = []
+    #pilot_colours = [] # To be updated
 
-    for pilot in range(200): # Using Max's transmitter
-        # print("Pilot chopping --------------------") # Test point
-        pilot_bits = pilot_long_bits[pilot * n_qpsk : (pilot + 1) * n_qpsk]
-        # print("Number of pilot bit pairs", np.array(pilot_bits).shape) # Test point
-        freq_pilot, colour = qpsk_gray(pilot_bits)
-        # print("Number of pilot frequency symbols", np.array(freq_pilot).shape) # Test point
-        pilot_freq_symbols.append(freq_pilot)
-        pilot_colours.append(colour)
-        block_no_cp = to_real_ofdm_block(freq_pilot)
-        # print("Number of pilot time signals", np.array(block_no_cp).shape) # Test point
-        time_pilot_blocks_no_cp.append(block_no_cp)
+    for pilot in long_pilot_blocks:
+        time_pilot_blocks_no_cp.append(to_real_ofdm_block(pilot))
+    print("Pilot block shape without CP (in time): ", np.array(time_pilot_blocks_no_cp).shape) # Test point
+    print("First pilot in time domain; ", time_pilot_blocks_no_cp[0]) # Test point
 
-
-    
-
-    np.save(COLMAP_NPY, np.array(pilot_colours, dtype=object)) # Using Max's transmitter
-    np.save(PILOT_NPY, pilot_freq_symbols) # Using Max's transmitter
+    #np.save(COLMAP_NPY, np.array(pilot_colours, dtype=object)) # To be updated
+    np.save(PILOT_NPY, long_pilot_blocks) # Using Max's transmitter
     np.save(PILOT_TIME_NO_CP_NPY, time_pilot_blocks_no_cp) # Using Max's transmitter
-    print("shape of pilot array is", np.array(time_pilot_blocks_no_cp).shape )
 
     payload = []  # no CP
     payload_type = []
@@ -212,7 +239,7 @@ def prepare_tx_sequence(plot=False) -> dict:
             payload.append(data_blocks_time[i * 4 + j])
             payload_type.append('data')
 
-    # print("Payload types: ", payload_type) # Test point
+    print("Payload types: ", payload_type) # Test point
 
     sequence = [
         silence,
@@ -281,8 +308,6 @@ with open(OUTPUT, 'wb') as fp:
 end_time = time.time()
 elapsed_time = end_time - start_time
 print(f"Elapsed Time: {elapsed_time} seconds")
-
-
 
 if __name__ == "__main__":
 
