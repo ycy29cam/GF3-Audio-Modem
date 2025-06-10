@@ -590,14 +590,15 @@ def qpsk_to_bits(sym_array):
     return bits
 
 def ldpc_decode_cw(llr_vec: np.ndarray) -> np.ndarray:  #!#!#! changed to stop decoding, did not fully fix problem but made it better
-    soft, _ = my_ldpc.decode(llr_vec)
-    return (soft < 0).astype(np.uint8)[:LDPC_K] 
+    
+    soft, it = my_ldpc.decode(llr_vec)
+    return (soft < 0).astype(np.uint8)[:LDPC_K], it
 
 if __name__ == "__main__":
 #------------------------------initialization-------------------------------------------
     # record_audio(20*FS)
-    SAMPLE_RATE, recording = read('rx_recording_group2.wav')
-    # recording = output["waveform"]
+    # SAMPLE_RATE, recording = read('rx_recording_group2.wav')
+    recording = output["waveform"]
     chirp_up   = generate_chirp(F0, F1, CHIRP_LEN_S)
     chirp_down = generate_chirp(F1, F0, CHIRP_LEN_S)
 
@@ -609,7 +610,7 @@ if __name__ == "__main__":
     averaged_h_gains = np.mean(np.abs(h_estimated_array), axis=0)
     equalised_all_blocks = equalise(useful_freq_blocks, h_estimated_array)
     corrected_data_blocks = phase_error_correction(equalised_all_blocks, np.load(PILOT_NPY)) # check normalisation factor # LDPC.decode(tells u number of iterations) # big noise even with perfect signal - why? # prbably an indexing issue 
-    # corrected_data_blocks = output["payload_data_blocks"] #!#!#!#! did not solve problem, so not an issue in the estimation chain
+    corrected_data_blocks = output["payload_data_blocks"] #!#!#!#! did not solve problem, so not an issue in the estimation chain # build a bit error rate thing
     print("Shape of equalised data blocks: ", corrected_data_blocks.shape)
 
 #-------------------------------LDPC shizzle---------------------------------------------
@@ -625,9 +626,8 @@ if __name__ == "__main__":
         # ----- build one 3888-LLR vector ---------------------------
         llr = np.empty(2 * LDPC_N, np.float64)
         h_data_estimates = averaged_h_gains[200:200 + LDPC_N]
-        # LLR_formula = (2*h**2)/(sigma2_est/2) #LLR formula assuming AGWN
         for k, s in enumerate(blk_syms[200:200 + LDPC_N]):
-            h_k = h_data_estimates[k] # Use the averaged gain for this specific subcarrier
+            h_k = h_data_estimates[k]
             scaling_factor = (2 * h_k**2) / (sigma2_est / 2)
             llr[2 * k]     = scaling_factor * s.real
             llr[2 * k + 1] = scaling_factor * s.imag
@@ -636,12 +636,17 @@ if __name__ == "__main__":
         np.clip(llr, -LLR_MAX, LLR_MAX, out=llr)
         print("Shape of LLR post-clipped (per 4095 freq sym): ", llr.shape)
         SYMS_PER_CW = LDPC_N // 2  # 972
+        # llr_cw1 = -1 * (blk_syms - 0.5)
+        # llr_cw1 = llr_cw1[:LDPC_N]
+        # llr_cw2 = -1 * (blk_syms - 0.5)
+        # llr_cw2 = llr_cw2[LDPC_N:]
         llr_cw1 = llr[:LDPC_N]
         llr_cw2 = llr[LDPC_N:]
         print("Shape of LDPC block to be decoded: ", llr_cw1.shape, llr_cw2.shape)
-        u1_hat = ldpc_decode_cw(llr_cw1)
-        u2_hat = ldpc_decode_cw(llr_cw2)
+        u1_hat ,it1 = ldpc_decode_cw(llr_cw1)
+        u2_hat ,it2 = ldpc_decode_cw(llr_cw2)
         print("Shape of LDPC block decoded: ", u1_hat.shape, u2_hat.shape)
+        print ("NO OF ITERATIONS = ", it1, "and ", it2 )
         decoded_info_bits.append(u1_hat)
         decoded_info_bits.append(u2_hat)
     print("Decoder output shape: ", np.array(decoded_info_bits).shape)
