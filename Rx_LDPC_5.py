@@ -10,6 +10,7 @@ from Tx_LPDC_2 import generate_chirp, WAV_TX, Q_COL
 import Transmitter3000 as tx
 import ldpc_jossy
 import pickle
+from scipy.signal.windows import gaussian
 
 # look into using GPU for hardware acceleration of convolution, e.g. using CuPy for faster processing
 
@@ -41,14 +42,12 @@ LDPC_K               = LDPC_N // 2
 #LLR_MAX             = 50.0
 LLR_MAX              = 200.0
 PILOT_TIME_NO_CP_NPY = "time_pilot_blocks_no_cp.npy"
-
-
 # Instantiate the same “802.11n” LDPC code that you used in Tx:
 my_ldpc = ldpc_jossy.code(standard='802.11n', rate='1/2', z=LDPC_Z)
-# Sanity check: each OFDM symbol carries two codewords,
 assert 2 * (LDPC_N // 2) <= (FFT_LEN // 2 - 1)
 with open(OUTPUT, 'rb') as fp:
     output = pickle.load(fp)
+
 
 def record_audio(expected_len:int, fs:int=FS) -> np.ndarray:
     print(f"Recording ≈{expected_len/fs:.2f} s …")
@@ -104,10 +103,6 @@ def start_end_synchronise(rx: np.ndarray,
     last_valid_block_index = valid_blocks
 
     return payload, start_payload, end_payload, last_valid_block_index
-
-
-from scipy.signal.windows import gaussian
-
 
 def sync_chopper(payload, last_valid_block_index, block_length_time = output["ofdm_block_len_with_cp"], cp_len=CP_LEN):
     """
@@ -538,23 +533,10 @@ def calculate_and_plot_ber(received_symbols, transmitted_symbols):
     plt.tight_layout()
     plt.show()
 
-def calculate_noise_variance_robust(received_symbols_slice): # y = hx + n forthe whole transmission # noise variance is approx 
-    """
-    Calculates noise variance from a slice of QPSK symbols by first
-    normalizing them to have the correct ideal average power.
-    """
-    if received_symbols_slice.size == 0:
-        return 1.0  # Return a default high noise value if slice is empty
+def calculate_noise_variance_robust(recieved_pilots): # y = hx + n forthe whole transmission # noise variance is approx 
 
-    P_ideal = 2.0  # Ideal average power of a (+-1, +-1j) QPSK constellation
-    p_received = np.mean(np.abs(received_symbols_slice)**2)
-    scaling_factor = np.sqrt(P_ideal / (p_received + 1e-12))
-    normalized_symbols = received_symbols_slice * scaling_factor
-    
-    hard_decisions = np.sign(normalized_symbols.real) + 1j * np.sign(normalized_symbols.imag)
-    residuals = normalized_symbols - hard_decisions
-    sigma2_est = np.mean(np.abs(residuals)**2)
-    
+    # so we need to get Y -  hx = n where Y is all the recieved pilots, h is all the estimated pilots, x is the original sent values and we want an absolute noise estimate fpr all pilot blocks
+
     return sigma2_est
 
 def qpsk_to_bits(sym_array):
@@ -591,11 +573,12 @@ if __name__ == "__main__":
 
 #-------------------------------LDPC shizzle---------------------------------------------
     decoded_info_bits = []
+    recieved_pilots = #####
+    sigma2_est = calculate_noise_variance_robust(recieved_pilots)
     for blk_idx, blk_syms in enumerate(corrected_data_blocks):
-        print("Enumerate shape: ", blk_idx, blk_syms.shape)
+        print("Enumerate shape: ", blk_idx, blk_syms.shape) 
         # ----- build one 3888-LLR vector ---------------------------
         llr = np.empty(2 * LDPC_N, np.float64)
-        sigma2_est = calculate_noise_variance_robust(blk_syms)
         h_data_estimates = averaged_h_gains[200:200 + LDPC_N]
         # LLR_formula = (2*h**2)/(sigma2_est/2) #LLR formula assuming AGWN
         for k, s in enumerate(blk_syms[200:200 + LDPC_N]):
@@ -604,56 +587,37 @@ if __name__ == "__main__":
             llr[2 * k]     = scaling_factor * s.real
             llr[2 * k + 1] = scaling_factor * s.imag
         print("Shape of LLR pre-clipped (per 4095 freq sym): ", np.array(llr).shape)
-        print(llr[:10])
+        print("we want the LLR's to actually be 2-3, and they are at ", llr[:10])
         np.clip(llr, -LLR_MAX, LLR_MAX, out=llr)
         print("Shape of LLR post-clipped (per 4095 freq sym): ", llr.shape)
-
-        # pairs = llr.reshape(-1, 2)  # shape (1 944, 2)
-        # print("LLR bit pairs shape (per 4095 freq sym): ", pairs.shape)
         SYMS_PER_CW = LDPC_N // 2  # 972
-
-        # llr_cw1 = np.ascontiguousarray(pairs[:SYMS_PER_CW].ravel())
-        # llr_cw2 = np.ascontiguousarray(pairs[SYMS_PER_CW:].ravel())
-
         llr_cw1 = llr[:LDPC_N]
         llr_cw2 = llr[LDPC_N:]
-
         print("Shape of LDPC block to be decoded: ", llr_cw1.shape, llr_cw2.shape)
-
         u1_hat = ldpc_decode_cw(llr_cw1)
         u2_hat = ldpc_decode_cw(llr_cw2)
         print("Shape of LDPC block decoded: ", u1_hat.shape, u2_hat.shape)
-
         decoded_info_bits.append(u1_hat)
         decoded_info_bits.append(u2_hat)
-
     print("Decoder output shape: ", np.array(decoded_info_bits).shape)
     print(len(decoded_info_bits))
-
     received_binary = np.array(decoded_info_bits).flatten()
     print("Shape of binary sequence: ", received_binary.shape)
 
-    # Save the decoded bits / ASCII
+#----------------------------save the decoded bits ---------------------------------- 
     np.save("received_bin", received_binary)
-
     print(f'Received {received_binary.size} bits, first 64 bits:\n', received_binary[:64])
-
     byte_array = np.packbits(received_binary)
-
     file_name_terminate = np.where(byte_array == 0)[0][0]
     file_name = byte_array[:file_name_terminate].tobytes().decode("utf-8")
-
     file_size_terminate = np.where(byte_array == 0)[0][1]
     file_size = int(byte_array[file_name_terminate + 1:file_size_terminate].tobytes().decode("utf-8"))
-
     file_content = byte_array[(file_size_terminate + 1):(file_size_terminate + int(file_size) + 1)]
-
     print("File name: ", file_name, ", File size: ", file_size, ", File content: ", file_content.tobytes())
-
     with open("received.txt", "wb") as f:
         f.write(file_content.tobytes())
 
-    # 12) Optionally compare TX vs RX in time‐domain & show spectrum
+#------------------------------extra plots-------------------------------------------------
     compare_tx_rx(recording, start_payload, end_payload)
     spectrum_plot(recording)
     
