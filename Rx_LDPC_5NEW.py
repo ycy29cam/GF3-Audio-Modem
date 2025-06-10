@@ -592,8 +592,8 @@ def ldpc_decode_cw(llr_vec: np.ndarray) -> np.ndarray:
 if __name__ == "__main__":
 #------------------------------initialization-------------------------------------------
     # record_audio(20*FS)
-    SAMPLE_RATE, recording = read('rx_recording_group2.wav')
-    #SAMPLE_RATE, recording = read('tx_sequence.wav')
+    # SAMPLE_RATE, recording = read('rx_recording_group2.wav')
+    SAMPLE_RATE, recording = read('tx_sequence.wav')
     #recording = output["waveform"]
     chirp_up   = generate_chirp(F0, F1, CHIRP_LEN_S)
     chirp_down = generate_chirp(F1, F0, CHIRP_LEN_S)
