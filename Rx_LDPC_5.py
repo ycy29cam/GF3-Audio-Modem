@@ -534,22 +534,50 @@ def calculate_and_plot_ber(received_symbols, transmitted_symbols):
     plt.show()
 
 def calculate_noise_variance_robust(all_freq_blocks, all_h_estimates, sent_pilots, last_valid_block_idx):
+
+    # Create a list to identify which blocks are pilots
     payload_type_list = ["pilot" if i % 5 == 0 else "data" for i in range(last_valid_block_idx)]
+
+    # Get the indices of pilot blocks that are within the received block range
     pilot_indices = [i for i, b_type in enumerate(payload_type_list) if b_type == 'pilot' and i < len(all_freq_blocks)]
+
     if not pilot_indices:
         print("Warning: No pilot blocks found to estimate noise variance. Returning a default value.")
-        return 1e-3 
+        return 1e-3  # Return a default high-noise estimate
+
+    # Isolate the received pilots (Y) and their corresponding channel estimates (h)
     received_pilots_freq = all_freq_blocks[pilot_indices]
     channel_estimates_pilots = all_h_estimates[pilot_indices]
+
+    # --- Main Change: Average the complex channel estimates from all pilot blocks ---
+    # This creates a single, more robust channel estimate (a 1D array).
+    if channel_estimates_pilots.shape[0] > 0:
+        averaged_h_estimate = np.mean(channel_estimates_pilots, axis=0)
+    else:
+        # Fallback in case no pilot estimates were found
+        print("Warning: Could not average pilot channel estimates. Using a default array of ones.")
+        # Create an array of ones with the correct subcarrier dimension
+        subcarrier_dim = all_freq_blocks.shape[1]
+        averaged_h_estimate = np.ones(subcarrier_dim, dtype=np.complex128)
+
+    # Ensure we only use the transmitted pilots (x) that correspond to the ones we received
     num_rx_pilots = len(received_pilots_freq)
     matched_sent_pilots = sent_pilots[:num_rx_pilots]
-    if received_pilots_freq.shape != channel_estimates_pilots.shape or received_pilots_freq.shape != matched_sent_pilots.shape:
+
+    # Defensive check for shape consistency
+    if received_pilots_freq.shape != matched_sent_pilots.shape:
         print(f"Error: Shape mismatch during noise calculation. Cannot proceed.")
-        print(f"Shapes: Y={received_pilots_freq.shape}, h={channel_estimates_pilots.shape}, x={matched_sent_pilots.shape}")
+        print(f"Shapes: Y={received_pilots_freq.shape}, x={matched_sent_pilots.shape}")
         return 1e-3
-    noise_estimate = received_pilots_freq - (channel_estimates_pilots * matched_sent_pilots)
+
+    # Estimate the noise vector: n = Y - h_avg * x
+    # NumPy broadcasting automatically applies the 1D averaged_h_estimate across all pilot blocks.
+    noise_estimate = received_pilots_freq - (averaged_h_estimate * matched_sent_pilots)
+
+    # The noise variance is the average power of the noise, E[|n|^2]
     sigma2_est = np.mean(np.abs(noise_estimate) ** 2)
-    print(f"Robust noise variance (sigma^2) estimated as: {sigma2_est:.2e}")
+
+    print(f"Robust noise variance (sigma^2) using averaged H estimated as: {sigma2_est:.2e}")
     return sigma2_est
 
 def qpsk_to_bits(sym_array):
@@ -568,8 +596,8 @@ def ldpc_decode_cw(llr_vec: np.ndarray) -> np.ndarray:  #!#!#! changed to stop d
 if __name__ == "__main__":
 #------------------------------initialization-------------------------------------------
     # record_audio(20*FS)
-    # SAMPLE_RATE, recording = read('rx_recording_group2.wav')
-    recording = output["waveform"]
+    SAMPLE_RATE, recording = read('rx_recording_group2.wav')
+    # recording = output["waveform"]
     chirp_up   = generate_chirp(F0, F1, CHIRP_LEN_S)
     chirp_down = generate_chirp(F1, F0, CHIRP_LEN_S)
 
