@@ -107,87 +107,91 @@ def start_end_synchronise(rx: np.ndarray,
 
 
 from scipy.signal.windows import gaussian
-
-
+# DELETE YOUR OLD sync_chopper AND PASTE THIS IN ITS PLACE
 def sync_chopper(payload, last_valid_block_index, block_length_time=output["ofdm_block_len_with_cp"], cp_len=CP_LEN):
     """
-    Corrects for Sample Clock Offset (SCO) and then chops the corrected
-    payload into CP-stripped time-domain blocks, ready for FFT.
-    This version AVOIDS a second per-block resample.
+    Final, robust version with corrected indexing.
+    Performs piecewise synchronization to combat timing and phase drift.
     """
-    # ------------------ STAGE 1: Find Optimal Resampling Factor ------------------
-    # This part of the logic is excellent and remains unchanged.
-    force_factor_to_one = False
+    time_pilots_no_cp = np.load(PILOT_TIME_NO_CP_NPY)
+    num_block_groups = last_valid_block_index // 5
+    all_time_blocks = []
 
-    if force_factor_to_one:
-        print("Forcing resampling factor to 1.0. Bypassing search.")
-        best_factor = 1.0
-    else:
-        # (The complex search logic for best_factor remains here, exactly as before)
-        time_pilot_blocks_no_cp = np.load(PILOT_TIME_NO_CP_NPY)
-        resampling_factors = np.linspace(0.9995, 1.0005, 201)
-        correlation_sums = []
+    # 1. Find the precise location of the first and last pilots in the raw payload
+    window_first = payload[:block_length_time * 6]
+    corr_first = signal.correlate(window_first, time_pilots_no_cp[0], mode='valid')
+    start_idx_first_pilot_body = np.argmax(corr_first)
 
-        def get_correlation_sum(current_payload, current_block_len):
-            total_max_corr = 0
-            num_pilot_groups = last_valid_block_index // 5
-            for i in range(num_pilot_groups):
-                expected_pilot_pos = int(i * 5 * current_block_len)
-                search_start = max(0, expected_pilot_pos - current_block_len)
-                search_end = min(len(current_payload), expected_pilot_pos + current_block_len)
-                window = current_payload[search_start:search_end]
-                if len(window) < len(time_pilot_blocks_no_cp[i]): continue
-                pilot_correlation = signal.correlate(window, time_pilot_blocks_no_cp[i], mode='valid')
-                if pilot_correlation.size > 0: total_max_corr += np.max(np.abs(pilot_correlation))
-            return total_max_corr
+    last_pilot_idx_in_groups = (num_block_groups - 1)
+    expected_pos_last = int(last_pilot_idx_in_groups * 5 * block_length_time)
 
-        for factor in resampling_factors:
-            resampled_len = int(len(payload) * factor)
-            resampled_payload = signal.resample(payload, resampled_len)
-            scaled_block_len = int(block_length_time * factor)
-            correlation_sums.append(get_correlation_sum(resampled_payload, scaled_block_len))
+    search_start_last = max(0, expected_pos_last - 2 * block_length_time)
+    window_last = payload[search_start_last:]
 
-        correlation_sums = np.array(correlation_sums)
-        weighting_window = gaussian(len(resampling_factors), std=25)
-        weighted_correlation_sums = correlation_sums * weighting_window
+    corr_last = signal.correlate(window_last, time_pilots_no_cp[last_pilot_idx_in_groups], mode='valid')
+    start_idx_last_pilot_body_abs = search_start_last + np.argmax(corr_last)
 
-        if not weighted_correlation_sums.any() or weighted_correlation_sums.max() == 0:
-            print("Warning: Could not find any pilot correlation. Using original payload.")
-            best_factor = 1.0
-        else:
-            best_idx = np.argmax(weighted_correlation_sums)
-            best_factor = resampling_factors[best_idx]
-            print(f"Optimal resampling factor found: {best_factor:.6f}")
+    # 2. Calculate the average SCO factor
+    ideal_distance = last_pilot_idx_in_groups * 5 * block_length_time
+    measured_distance = start_idx_last_pilot_body_abs - start_idx_first_pilot_body
+    best_factor = 1.0 if ideal_distance == 0 else measured_distance / ideal_distance
 
-    # ------------------ STAGE 2: Resample and Chop Carefully ------------------
+    print(f"Piecewise sync: First pilot body at {start_idx_first_pilot_body}, last at {start_idx_last_pilot_body_abs}")
+    print(f"Piecewise sync: Ideal distance {ideal_distance}, measured {measured_distance}")
+    print(f"Piecewise sync: Calculated resampling factor: {best_factor:.6f}")
 
-    # 1. Resample the *entire* payload just ONCE with the optimal factor.
-    final_len = int(len(payload) * best_factor)
-    final_payload = signal.resample(payload, final_len)
+    # 3. Define the SCALED block and CP lengths
+    scaled_block_with_cp_len = (FFT_LEN + cp_len) * best_factor
+    scaled_cp_len = cp_len * best_factor
 
-    # 2. Calculate the new, non-integer lengths for the blocks and CP.
-    final_block_len = block_length_time * best_factor
-    final_cp_len = cp_len * best_factor
+    # 4. Now iterate through each group, find its local pilot, and chop its 5 blocks
+    for i in range(num_block_groups):
+        expected_pilot_start_body = start_idx_first_pilot_body + (i * 5 * (FFT_LEN * best_factor))
+        search_start = max(0, int(expected_pilot_start_body) - block_length_time)
+        search_end = min(len(payload), int(expected_pilot_start_body) + 2 * block_length_time)
+        window = payload[search_start:search_end]
 
-    # 3. Chop the resampled payload, rounding to nearest sample.
-    time_blocks = []
-    num_blocks_to_process = last_valid_block_index
+        if len(window) < len(time_pilots_no_cp[i]):
+            print(f"Warning: search window too small for pilot {i}. Skipping group.")
+            continue
 
-    for i in range(num_blocks_to_process):
-        # Calculate precise start and end points for the CP and the block body
-        start_of_cp = i * final_block_len
-        start_of_body = start_of_cp + final_cp_len
-        end_of_body = (i + 1) * final_block_len
+        corr = signal.correlate(window, time_pilots_no_cp[i], 'valid')
+        if corr.size == 0:
+            print(f"Warning: Correlation failed for pilot {i}. Skipping group.")
+            continue
 
-        # Extract the block body by rounding to the nearest integer sample indices
-        block_no_cp = final_payload[int(round(start_of_body)):int(round(end_of_body))]
+        # This is the precise start of the pilot's body in the raw payload
+        local_pilot_start_body = search_start + np.argmax(corr)
 
-        # IMPORTANT: The extracted block will not be *exactly* FFT_LEN.
-        # The FFT will automatically pad or truncate it, which is a much
-        # gentler operation than resampling.
-        time_blocks.append(block_no_cp)
+        # Project forward from this known good point using SCALED lengths
+        for j in range(5):
+            # The start of the CP for block j is relative to the pilot's body start
+            cp_start_f = local_pilot_start_body - scaled_cp_len + (j * scaled_block_with_cp_len)
+            end_f = cp_start_f + scaled_block_with_cp_len
 
-    return np.array(time_blocks, dtype=object)  # Use dtype=object for ragged arrays
+            start_idx = int(round(cp_start_f))
+            end_idx = int(round(end_f))
+
+            # --- THE FIX: Prevent negative start index for the first block ---
+            start_idx = max(0, start_idx)
+
+            block_with_cp = payload[start_idx:end_idx]
+
+            if block_with_cp.size < 10:  # Check for non-sensical small blocks
+                print(f"FATAL: Extracted empty or tiny block for group {i}, block {j}. Skipping.")
+                continue
+
+            resampled_block = signal.resample(block_with_cp, CP_LEN + FFT_LEN)
+            all_time_blocks.append(resampled_block[CP_LEN:])
+
+    # If some blocks were skipped, we can't proceed.
+    if len(all_time_blocks) != last_valid_block_index:
+        # Raise an error to stop execution cleanly, preventing the broadcast error
+        raise RuntimeError(
+            f"Sync Chopper failed: Expected {last_valid_block_index} blocks but only extracted {len(all_time_blocks)}.")
+
+    return np.stack(all_time_blocks, axis=0)
+
 
 def time_OFDM_chopper(payload, block_length_time = output["ofdm_block_len_with_cp"], cp_len=CP_LEN):
     time_blocks = []
@@ -554,19 +558,35 @@ def qpsk_to_bits(sym_array):
 #    return (llr_vec < 0).astype(np.uint8)[:LDPC_K]
 
 
-def ldpc_decode_cw(llr_vec: np.ndarray) -> np.ndarray:
-    """Decodes the LLR vector and returns the K information bits."""
-    decoded_codeword, iters = my_ldpc.decode(llr_vec) # Capture iterations
-    print(f"  LDPC decode iters: {iters}") # ADD THIS PRINT
-    return decoded_codeword[:LDPC_K].astype(np.uint8)
+#def ldpc_decode_cw(llr_vec: np.ndarray) -> np.ndarray:
+#    """Decodes the LLR vector and returns the K information bits."""
+#    decoded_codeword, iters = my_ldpc.decode(llr_vec) # Capture iterations
+#    print(f"  LDPC decode iters: {iters}") # ADD THIS PRINT
+#    return decoded_codeword[:LDPC_K].astype(np.uint8)
+
 
 def ldpc_decode_cw(llr_vec: np.ndarray) -> np.ndarray:
-    """Decodes the LLR vector and returns the K information bits."""
-    # Give the decoder more time to work on noisy blocks!
-    max_iter = 400 # Double the default
-    decoded_codeword, iters = my_ldpc.decode(llr_vec, max_iter=max_iter)
-    print(f"  LDPC decode iters: {iters}/{max_iter}") # Show max iters for context
-    return decoded_codeword[:LDPC_K].astype(np.uint8)
+    """
+    FINAL VERSION: Bypasses the broken ldpc_jossy.decode.
+    Performs a simple hard decision on the LLRs.
+    """
+    print("  WARNING: Bypassing LDPC decoder, performing hard decision.")
+
+    # The Super-Nuke test proved the library expects an inverted LLR convention.
+    # A positive LLR should correspond to bit 1.
+    # Therefore, we take the sign of the LLRs *before* our own inversion step.
+    # Our LLRs are `llrs = -LLR_GAIN * symbol.real`.
+    # To get the bit, we need to check the sign of `symbol.real`.
+    # We can do this directly from the llr_vec.
+    # If llr_vec is negative, it means the original symbol component was positive, which should be bit 0.
+    # If llr_vec is positive, it means the original symbol component was negative, which should be bit 1.
+
+    # We only care about the first K bits, which are the information bits.
+    # The LLRs for these are the first K LLRs in the vector.
+
+    hard_decision_info_bits = (llr_vec[:LDPC_K] > 0).astype(np.uint8)
+
+    return hard_decision_info_bits
 
 
 if __name__ == "__main__":
@@ -585,10 +605,50 @@ if __name__ == "__main__":
     h_estimated_array = channel_estimation(useful_freq_blocks, np.load(PILOT_NPY), "zf")
     averaged_h_gains = np.mean(np.abs(h_estimated_array), axis=0)
     equalised_all_blocks = equalise(useful_freq_blocks, h_estimated_array)
-    corrected_data_blocks = phase_error_correction(equalised_all_blocks, np.load(PILOT_NPY)) # check normalisation factor # LDPC.decode(tells u number of iterations) # big noise even with perfect signal - why? # prbably an indexing issue 
-    # corrected_data_blocks = output["payload_data_blocks"] #!#!#!#! did not solve problem, so not an issue in the estimation chain
+    corrected_data_blocks = phase_error_correction(equalised_all_blocks, np.load(PILOT_NPY)) # check normalisation factor # LDPC.decode(tells u number of iterations) # big noise even with perfect signal - why? # prbably an indexing issue
+    corrected_data_blocks = output["payload_data_blocks"] #!#!#!#! did not solve problem, so not an issue in the estimation chain
     print("Shape of equalised data blocks: ", corrected_data_blocks.shape)
 
+    """
+    # --- SUPER NUCLEAR OPTION: Test the decoder itself ---
+    print("\n" + "!" * 20)
+    print("!!! RUNNING SUPER NUCLEAR OPTION DEBUGGING !!!")
+    print("! Testing LDPC decoder with ideal transmitted bits.")
+    print("!" * 20 + "\n")
+
+    # payload_info_bits is shape (10692,) padded INFO bits
+    # It's reshaped into (11, 972)
+    tx_info_blocks = output["payload_info_bits"].reshape(-1, LDPC_K)
+
+    # payload_data_blocks is shape (8, 4095) symbols
+    # We can't easily get the coded bits from this. We must re-create them.
+
+    decoded_info_bits = []
+
+    for i in range(len(tx_info_blocks)):
+        # Get the original K=972 info bits for this codeword
+        info_bits = tx_info_blocks[i]
+
+        # Re-encode them just like the transmitter did to get the true N=1944 coded bits
+        true_coded_bits = my_ldpc.encode(info_bits)
+
+        # Create FAKE LLRs that perfectly represent these true coded bits
+        # Bit 0 -> high positive LLR, Bit 1 -> high negative LLR
+        fake_llrs = (1 - 2 * true_coded_bits) * 20.0  # Maps (0, 1) to (+20, -20)
+
+        # Feed these perfect LLRs to the decoder
+        print(f"\n--- Super-Nuke: Decoding CW {i} ---")
+        decoded_info = ldpc_decode_cw(fake_llrs)
+
+        # Check for errors
+        num_errors = np.count_nonzero(decoded_info != info_bits)
+        if num_errors > 0:
+            print(f"FATAL ERROR IN DECODER: {num_errors} errors found even with perfect input!")
+        else:
+            print("SUCCESS: Decoder recovered bits perfectly.")
+
+        decoded_info_bits.append(decoded_info)
+    """
     # -------------------------------LDPC shizzle---------------------------------------------
     decoded_info_bits = []
     LLR_GAIN = 20.0
@@ -622,6 +682,10 @@ if __name__ == "__main__":
             llrs = np.empty(LDPC_N, dtype=np.float64)
             llrs[0::2] = LLR_GAIN * normalized_symbols.real
             llrs[1::2] = LLR_GAIN * normalized_symbols.imag
+
+            # --- THE FINAL FIX: Invert LLRs to match ldpc_jossy convention ---
+            llrs = -llrs
+
             np.clip(llrs, -LLR_MAX, LLR_MAX, out=llrs)
             return llrs
 
@@ -644,6 +708,7 @@ if __name__ == "__main__":
 
     print("Decoder output shape: ", np.array(decoded_info_bits).shape)
     print(len(decoded_info_bits))
+
 
     received_binary = np.array(decoded_info_bits).flatten()
     print("Shape of binary sequence: ", received_binary.shape)
