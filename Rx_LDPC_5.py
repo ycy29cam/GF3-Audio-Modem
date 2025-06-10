@@ -117,7 +117,7 @@ def sync_chopper(payload, last_valid_block_index, block_length_time = output["of
     """
     # --- FIX SCALING FACTOR ---
     # Set this to True to bypass the search and fix the resampling factor to 1.0
-    force_factor_to_one = False
+    force_factor_to_one = True
 
     if force_factor_to_one:
         print("Forcing resampling factor to 1.0. Bypassing search.")
@@ -538,7 +538,7 @@ def calculate_and_plot_ber(received_symbols, transmitted_symbols):
     plt.tight_layout()
     plt.show()
 
-def calculate_noise_variance_robust(received_symbols_slice):
+def calculate_noise_variance_robust(received_symbols_slice): # y = hx + n forthe whole transmission # noise variance is approx 
     """
     Calculates noise variance from a slice of QPSK symbols by first
     normalizing them to have the correct ideal average power.
@@ -566,9 +566,9 @@ def qpsk_to_bits(sym_array):
     bits[1::2] = bQ
     return bits
 
-def ldpc_decode_cw(llr_vec: np.ndarray) -> np.ndarray: 
-    soft, _ = my_ldpc.decode(llr_vec)
-    return (soft < 0).astype(np.uint8)[:LDPC_K] 
+def ldpc_decode_cw(llr_vec: np.ndarray) -> np.ndarray:  #!#!#! changed to stop decoding, did not fully fix problem but made it better
+    # soft, _ = my_ldpc.decode(llr_vec)
+    return (llr_vec < 0).astype(np.uint8)[:LDPC_K] 
 
 if __name__ == "__main__":
 #------------------------------initialization-------------------------------------------
@@ -585,7 +585,8 @@ if __name__ == "__main__":
     h_estimated_array = channel_estimation(useful_freq_blocks, np.load(PILOT_NPY), "zf")
     averaged_h_gains = np.mean(np.abs(h_estimated_array), axis=0)
     equalised_all_blocks = equalise(useful_freq_blocks, h_estimated_array)
-    corrected_data_blocks = phase_error_correction(equalised_all_blocks, np.load(PILOT_NPY))
+    corrected_data_blocks = phase_error_correction(equalised_all_blocks, np.load(PILOT_NPY)) # check normalisation factor # LDPC.decode(tells u number of iterations) # big noise even with perfect signal - why? # prbably an indexing issue 
+    # corrected_data_blocks = output["payload_data_blocks"] #!#!#!#! did not solve problem, so not an issue in the estimation chain
     print("Shape of equalised data blocks: ", corrected_data_blocks.shape)
 
 #-------------------------------LDPC shizzle---------------------------------------------
@@ -603,6 +604,7 @@ if __name__ == "__main__":
             llr[2 * k]     = scaling_factor * s.real
             llr[2 * k + 1] = scaling_factor * s.imag
         print("Shape of LLR pre-clipped (per 4095 freq sym): ", np.array(llr).shape)
+        print(llr[:10])
         np.clip(llr, -LLR_MAX, LLR_MAX, out=llr)
         print("Shape of LLR post-clipped (per 4095 freq sym): ", llr.shape)
 

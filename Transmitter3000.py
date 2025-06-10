@@ -106,7 +106,7 @@ def ldpc_insert(prefilled: np.array, ldpc_data: np.array):
 
     for i in range(min(n_full_pairs, A)):
         data[i, start:start+block_size, :] = ldpc_data[2*i] 
-        data[i, start+block_size:start+block_size+block_size, :] = ldpc_data[2*i]
+        data[i, start+block_size:start+block_size+block_size, :] = ldpc_data[2*i+1]
 
     if (B % 2 == 1) and (n_full_pairs < A):
         data[n_full_pairs, start:start+block_size, :] = ldpc_data[-1]
