@@ -105,73 +105,98 @@ def start_end_synchronise(rx: np.ndarray,
 
     return payload, start_payload, end_payload, last_valid_block_index
 
+
+from scipy.signal.windows import gaussian
+
+
 def sync_chopper(payload, last_valid_block_index, block_length_time = output["ofdm_block_len_with_cp"], cp_len=CP_LEN):
     """
     Corrects for sample clock offset by resampling the payload. It finds the optimal
-    resampling factor by maximizing the sum of pilot correlation peaks.
+    resampling factor by maximizing the sum of pilot correlation peaks, with a
+    weighting towards zero-shift to avoid large resampling values.
     """
-    time_pilot_blocks_no_cp = np.load(PILOT_TIME_NO_CP_NPY)
+    # --- FIX SCALING FACTOR ---
+    # Set this to True to bypass the search and fix the resampling factor to 1.0
+    force_factor_to_one = False
 
-    # 1. Generate a range of resampling factors to test (e.g., +/- 500 parts-per-million)
-    resampling_factors = np.linspace(0.9995, 1.0005, 51)
-    correlation_sums = []
-
-    # This nested helper function calculates the correlation score for a given payload
-    def get_correlation_sum(current_payload, current_block_len):
-        total_max_corr = 0
-        num_pilot_groups = last_valid_block_index // 5
-
-        for i in range(num_pilot_groups):
-            # Define a search window based on the expected position of the pilot
-            expected_pilot_pos = int(i * 5 * current_block_len)
-            search_start = max(0, expected_pilot_pos - current_block_len)
-            search_end = min(len(current_payload), expected_pilot_pos + current_block_len)
-            window = current_payload[search_start:search_end]
-            
-            # Ensure the window is large enough for correlation
-            if len(window) < len(time_pilot_blocks_no_cp[i]):
-                continue
-
-            pilot_correlation = signal.correlate(window, time_pilot_blocks_no_cp[i], mode='valid')
-            if pilot_correlation.size > 0:
-                total_max_corr += np.max(pilot_correlation)
-        
-        return total_max_corr
-
-    # 2. For each factor, resample the payload and calculate its correlation score
-    for factor in resampling_factors:
-        resampled_len = int(len(payload) * factor)
-        resampled_payload = signal.resample(payload, resampled_len)
-        scaled_block_len = int(block_length_time * factor)
-        
-        current_sum = get_correlation_sum(resampled_payload, scaled_block_len)
-        correlation_sums.append(current_sum)
-
-    # 3. Find the best resampling factor and create the final, corrected payload
-    if not correlation_sums or max(correlation_sums) == 0:
-         print("Warning: Could not find any pilot correlation. Using original payload.")
-         best_factor = 1.0
-         final_payload = payload
+    if force_factor_to_one:
+        print("Forcing resampling factor to 1.0. Bypassing search.")
+        best_factor = 1.0
+        final_payload = payload
     else:
-        best_idx = np.argmax(correlation_sums)
-        best_factor = resampling_factors[best_idx]
-        final_len = int(len(payload) * best_factor)
-        final_payload = signal.resample(payload, final_len)
-        print(f"Optimal resampling factor found: {best_factor:.6f}")
+        # --- The original "clever" logic runs if the flag is False ---
+        time_pilot_blocks_no_cp = np.load(PILOT_TIME_NO_CP_NPY)
 
-    # 4. Plot the graph of correlation sums vs. resampling factors
-    plt.figure(figsize=(9, 5))
-    plt.plot(resampling_factors, correlation_sums, '.-')
-    plt.axvline(best_factor, color='r', linestyle='--', label=f'Best Factor: {best_factor:.6f}')
-    plt.title("Resampling Factor vs. Sum of Max Pilot Correlations")
-    plt.xlabel("Resampling Factor")
-    plt.ylabel("Sum of Max Correlation Values")
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
+        # 1. Generate a range of resampling factors with increased resolution (now 201 points)
+        resampling_factors = np.linspace(0.9995, 1.0005, 201)
+        correlation_sums = []
 
-    # 5. Chop the optimally resampled payload into blocks
+        # This nested helper function calculates the correlation score for a given payload
+        def get_correlation_sum(current_payload, current_block_len):
+            total_max_corr = 0
+            num_pilot_groups = last_valid_block_index // 5
+
+            for i in range(num_pilot_groups):
+                expected_pilot_pos = int(i * 5 * current_block_len)
+                search_start = max(0, expected_pilot_pos - current_block_len)
+                search_end = min(len(current_payload), expected_pilot_pos + current_block_len)
+                window = current_payload[search_start:search_end]
+                
+                if len(window) < len(time_pilot_blocks_no_cp[i]):
+                    continue
+
+                pilot_correlation = signal.correlate(window, time_pilot_blocks_no_cp[i], mode='valid')
+                if pilot_correlation.size > 0:
+                    total_max_corr += np.max(np.abs(pilot_correlation))
+            
+            return total_max_corr
+
+        # 2. For each factor, resample the payload and calculate its correlation score
+        for factor in resampling_factors:
+            resampled_len = int(len(payload) * factor)
+            resampled_payload = signal.resample(payload, resampled_len)
+            scaled_block_len = int(block_length_time * factor)
+            
+            current_sum = get_correlation_sum(resampled_payload, scaled_block_len)
+            correlation_sums.append(current_sum)
+
+        correlation_sums = np.array(correlation_sums)
+
+        # 3. Apply a Gaussian weighting to the correlation sums to favor factors closer to 1.0
+        num_factors = len(resampling_factors)
+        weighting_window = gaussian(num_factors, std=25)
+        weighted_correlation_sums = correlation_sums * weighting_window
+
+        # 4. Find the best resampling factor using the weighted scores
+        if not weighted_correlation_sums.any() or weighted_correlation_sums.max() == 0:
+            print("Warning: Could not find any pilot correlation. Using original payload.")
+            best_factor = 1.0
+            final_payload = payload
+        else:
+            best_idx = np.argmax(weighted_correlation_sums)
+            best_factor = resampling_factors[best_idx]
+            final_len = int(len(payload) * best_factor)
+            final_payload = signal.resample(payload, final_len)
+            print(f"Optimal resampling factor found: {best_factor:.6f}")
+
+        # 5. Plot the original, weighted, and final results for analysis
+        plt.figure(figsize=(10, 6))
+        plt.plot(resampling_factors, correlation_sums, 'b.-', label='Original Correlation')
+        plt.plot(resampling_factors, weighted_correlation_sums, 'g.-', label='Weighted Correlation')
+        if correlation_sums.max() > 0:
+            scaled_window = weighting_window * correlation_sums.max()
+            plt.plot(resampling_factors, scaled_window, 'm--', alpha=0.7, label='Gaussian Weighting (scaled)')
+
+        plt.axvline(best_factor, color='r', linestyle='--', label=f'Best Factor: {best_factor:.6f}')
+        plt.title("Resampling Factor vs. Pilot Correlation")
+        plt.xlabel("Resampling Factor")
+        plt.ylabel("Sum of Max Correlation Values")
+        plt.grid(True)
+        plt.legend()
+        plt.tight_layout()
+        plt.show()
+
+    # 6. Chop the optimally resampled payload into blocks (this part is common)
     final_block_len = int(block_length_time * best_factor)
     final_cp_len = int(cp_len * best_factor)
     
@@ -548,8 +573,8 @@ def ldpc_decode_cw(llr_vec: np.ndarray) -> np.ndarray:
 if __name__ == "__main__":
 #------------------------------initialization-------------------------------------------
     # record_audio(20*FS)
-    SAMPLE_RATE, recording = read('rx_recording_group2.wav')
-    # recording = output["waveform"]
+    # SAMPLE_RATE, recording = read('rx_recording_group2.wav')
+    recording = output["waveform"]
     chirp_up   = generate_chirp(F0, F1, CHIRP_LEN_S)
     chirp_down = generate_chirp(F1, F0, CHIRP_LEN_S)
 
@@ -581,15 +606,15 @@ if __name__ == "__main__":
         np.clip(llr, -LLR_MAX, LLR_MAX, out=llr)
         print("Shape of LLR post-clipped (per 4095 freq sym): ", llr.shape)
 
-        pairs = llr.reshape(-1, 2)  # shape (1 944, 2)
-        print("LLR bit pairs shape (per 4095 freq sym): ", pairs.shape)
+        # pairs = llr.reshape(-1, 2)  # shape (1 944, 2)
+        # print("LLR bit pairs shape (per 4095 freq sym): ", pairs.shape)
         SYMS_PER_CW = LDPC_N // 2  # 972
 
-        llr_cw1 = np.ascontiguousarray(pairs[:SYMS_PER_CW].ravel())
-        llr_cw2 = np.ascontiguousarray(pairs[SYMS_PER_CW:].ravel())
+        # llr_cw1 = np.ascontiguousarray(pairs[:SYMS_PER_CW].ravel())
+        # llr_cw2 = np.ascontiguousarray(pairs[SYMS_PER_CW:].ravel())
 
-        # llr_cw1 = llr[:LDPC_N]
-        # llr_cw2 = llr[LDPC_N:]
+        llr_cw1 = llr[:LDPC_N]
+        llr_cw2 = llr[LDPC_N:]
 
         print("Shape of LDPC block to be decoded: ", llr_cw1.shape, llr_cw2.shape)
 

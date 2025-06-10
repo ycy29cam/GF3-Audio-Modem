@@ -169,21 +169,18 @@ def prepare_tx_sequence(plot=False) -> dict:
         data_block_freq.append(qpsk)
         data_blocks_time.append(to_real_ofdm_block(qpsk)) # Each QPSK is (4095), each time domain data block is (8192); data_blocks_time has shape (data blocks needed, 8192)
 
-    # print("LDPC inserted bit pair array shape: ", np.array(data_blocks_bin).shape) # Test point
-    # print("LDPC inserted frequency data block array shape: ", np.array(data_block_freq).shape) # Test point
-    # print("LDPC inserted time data block array shape: ", np.array(data_blocks_time).shape) # Test point
-
     # ---------- LDPC insertion complete ----------
 
     # ------------- build sequence --> 'payload' list will contain TD blocks WITHOUT CP -------------
 
-    pilot_long_bits = random_bitpairs(n =(n_qpsk * (block_groups + 1))) # +1 just in case there isn't enough pilots
+    pilot_long_bits = random_bitpairs(n =(n_qpsk * 200)) # +1 just in case there isn't enough pilots
+    print(pilot_long_bits[:10])
 
     time_pilot_blocks_no_cp = []
     pilot_freq_symbols = []
     pilot_colours = []
 
-    for pilot in range(block_groups + 1): # Using Max's transmitter
+    for pilot in range(200): # Using Max's transmitter
         # print("Pilot chopping --------------------") # Test point
         pilot_bits = pilot_long_bits[pilot * n_qpsk : (pilot + 1) * n_qpsk]
         # print("Number of pilot bit pairs", np.array(pilot_bits).shape) # Test point
@@ -195,11 +192,13 @@ def prepare_tx_sequence(plot=False) -> dict:
         # print("Number of pilot time signals", np.array(block_no_cp).shape) # Test point
         time_pilot_blocks_no_cp.append(block_no_cp)
 
+
     
 
     np.save(COLMAP_NPY, np.array(pilot_colours, dtype=object)) # Using Max's transmitter
     np.save(PILOT_NPY, pilot_freq_symbols) # Using Max's transmitter
     np.save(PILOT_TIME_NO_CP_NPY, time_pilot_blocks_no_cp) # Using Max's transmitter
+    print("shape of pilot array is", np.array(time_pilot_blocks_no_cp).shape )
 
     payload = []  # no CP
     payload_type = []
