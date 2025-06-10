@@ -541,7 +541,7 @@ def qpsk_to_bits(sym_array):
     bits[1::2] = bQ
     return bits
 
-def ldpc_decode_cw(llr_vec: np.ndarray) -> np.ndarray: ## think LLR might not be in right format for decoding?
+def ldpc_decode_cw(llr_vec: np.ndarray) -> np.ndarray: 
     soft, _ = my_ldpc.decode(llr_vec)
     return (soft < 0).astype(np.uint8)[:LDPC_K] 
 
@@ -558,6 +558,7 @@ if __name__ == "__main__":
     time_blocks = sync_chopper(payload, last_valid_block_index)
     useful_freq_blocks  = freq_domain(time_blocks)
     h_estimated_array = channel_estimation(useful_freq_blocks, np.load(PILOT_NPY), "zf")
+    averaged_h_gains = np.mean(np.abs(h_estimated_array), axis=0)
     equalised_all_blocks = equalise(useful_freq_blocks, h_estimated_array)
     corrected_data_blocks = phase_error_correction(equalised_all_blocks, np.load(PILOT_NPY))
     print("Shape of equalised data blocks: ", corrected_data_blocks.shape)
@@ -569,11 +570,13 @@ if __name__ == "__main__":
         # ----- build one 3888-LLR vector ---------------------------
         llr = np.empty(2 * LDPC_N, np.float64)
         sigma2_est = calculate_noise_variance_robust(blk_syms)
-        h = np.mean(np.abs(h_estimated_array))
-        LLR_formula = (2*h**2)/(sigma2_est/2) #LLR formula assuming AGWN
-        for k, s in enumerate(blk_syms[200:200 + LDPC_N]): #updates LLR for each block
-            llr[2 * k] = LLR_formula * s.real
-            llr[2 * k + 1] = LLR_formula * s.imag
+        h_data_estimates = averaged_h_gains[200:200 + LDPC_N]
+        # LLR_formula = (2*h**2)/(sigma2_est/2) #LLR formula assuming AGWN
+        for k, s in enumerate(blk_syms[200:200 + LDPC_N]):
+            h_k = h_data_estimates[k] # Use the averaged gain for this specific subcarrier
+            scaling_factor = (2 * h_k**2) / (sigma2_est / 2)
+            llr[2 * k]     = scaling_factor * s.real
+            llr[2 * k + 1] = scaling_factor * s.imag
         print("Shape of LLR pre-clipped (per 4095 freq sym): ", np.array(llr).shape)
         np.clip(llr, -LLR_MAX, LLR_MAX, out=llr)
         print("Shape of LLR post-clipped (per 4095 freq sym): ", llr.shape)
@@ -584,6 +587,10 @@ if __name__ == "__main__":
 
         llr_cw1 = np.ascontiguousarray(pairs[:SYMS_PER_CW].ravel())
         llr_cw2 = np.ascontiguousarray(pairs[SYMS_PER_CW:].ravel())
+
+        # llr_cw1 = llr[:LDPC_N]
+        # llr_cw2 = llr[LDPC_N:]
+
         print("Shape of LDPC block to be decoded: ", llr_cw1.shape, llr_cw2.shape)
 
         u1_hat = ldpc_decode_cw(llr_cw1)
@@ -622,3 +629,4 @@ if __name__ == "__main__":
     # 12) Optionally compare TX vs RX in time‐domain & show spectrum
     compare_tx_rx(recording, start_payload, end_payload)
     spectrum_plot(recording)
+    

@@ -233,7 +233,7 @@ def prepare_tx_sequence(plot=False) -> dict:
     else:
         waveform_scaled = waveform_unscaled.astype(np.float32)
 
-    sf.write(WAV_TX, waveform_scaled, FS)#
+    sf.write(WAV_TX, waveform_scaled, FS)
 
     # ------------- plot function -------------
     if plot:
