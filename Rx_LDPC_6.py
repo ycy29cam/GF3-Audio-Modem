@@ -138,7 +138,9 @@ def sync_chopper(payload, last_valid_block_index, block_length_time=output["ofdm
 
     print(f"Piecewise sync: First pilot body at {start_idx_first_pilot_body}, last at {start_idx_last_pilot_body_abs}")
     print(f"Piecewise sync: Ideal distance {ideal_distance}, measured {measured_distance}")
+    best_factor =1 
     print(f"Piecewise sync: Calculated resampling factor: {best_factor:.6f}")
+
 
     # 3. Define the SCALED block and CP lengths
     scaled_block_with_cp_len = (FFT_LEN + cp_len) * best_factor
@@ -592,8 +594,8 @@ def ldpc_decode_cw(llr_vec: np.ndarray) -> np.ndarray:
 if __name__ == "__main__":
 #------------------------------initialization-------------------------------------------
     # record_audio(20*FS)
-    record_audio(480000)
-    SAMPLE_RATE, recording = read('rx_recording.wav')
+    # record_audio(480000)
+    SAMPLE_RATE, recording = read('rx_recording_group1.wav')
     #SAMPLE_RATE, recording = read('tx_sequence.wav')
     #recording = output["waveform"]
     chirp_up   = generate_chirp(F0, F1, CHIRP_LEN_S)
