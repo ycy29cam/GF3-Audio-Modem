@@ -2,15 +2,17 @@ import numpy as np
 from pathlib import Path
 from typing import Tuple
 
-FILE_DIR = "3000/example.txt"
+FILE_DIR = "3000/sample.html"
 FILE_BIN_DIR = "3000/example.npy"
+
+SUPPORTED_EXTENSIONS = {'.txt', '.wav', '.tiff', '.html', '.bmp'}
 
 def load_file(path: str) -> Tuple[bytes, str]:
     """Return raw bytes and filename (without folders)."""
     p = Path(path).expanduser().resolve()
     if not p.exists():
         raise FileNotFoundError(p)
-    if p.suffix.lower() not in {'.txt', '.wav', '.tiff', '.tif'}:
+    if p.suffix.lower() not in SUPPORTED_EXTENSIONS:
         raise ValueError('Unsupported extension')
     data = p.read_bytes()
     return data, p.name
