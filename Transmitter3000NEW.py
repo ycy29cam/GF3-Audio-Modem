@@ -135,9 +135,6 @@ def to_real_ofdm_block(useful_freq_symbols, n=FFT_LEN):
     X[1:half]   = useful_freq_symbols
     X[half+1:]  = np.conj(useful_freq_symbols[::-1])
     x = fft.ifft(X).real.astype(np.float32)
-
-    # This function doesn't normalise (produced by Max), compared to the version Steve and Phil uses
-    # Intentionally used to match the receiver Max made
     return x
 
 def add_cyclic_prefix(x: np.ndarray, cp_len: int = CP_LEN) -> np.ndarray:
